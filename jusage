@@ -1,0 +1,46 @@
+#!/bin/bash
+# jusage — the one command. No args = refresh everything and show the numbers.
+# Any args are passed straight to claude_usage.py (e.g. `jusage report --by model`).
+#   jusage            scan + live meters + 7d report + 5h windows, then share + dashboard if a
+#                     reports folder is configured
+#   jusage app        open the menu bar app
+#   jusage upgrade    pull the latest version from GitHub (rebuilds the menu bar app)
+#   jusage help       full option list
+DIR="$(cd "$(dirname "$(readlink "${BASH_SOURCE[0]}" || echo "${BASH_SOURCE[0]}")")" && pwd)"
+CU="$DIR/claude_usage.py"
+CFG="$HOME/.claude-usage/config.json"
+
+case "${1:-}" in
+  "")
+    python3 "$CU" scan
+    python3 "$CU" live
+    python3 "$CU" report --since 7d
+    python3 "$CU" report --by blocks --last 6
+    if [ -f "$CFG" ] && grep -q reports_dir "$CFG"; then
+      python3 "$CU" share
+      python3 "$CU" dashboard --open
+    else
+      echo
+      echo "Not sharing yet: run  jusage share --reports <shared folder> --user <you>  once and it is remembered."
+    fi
+    ;;
+  app)
+    if [ -d "$DIR/jusage.app" ]; then open "$DIR/jusage.app"; else echo "No jusage.app here; run install.command (needs Command Line Tools)."; fi
+    ;;
+  upgrade)
+    if [ -d "$DIR/.git" ]; then
+      git -C "$DIR" pull --ff-only && echo "jusage $(cat "$DIR/VERSION")"
+      [ -d "$DIR/menubar" ] && command -v swiftc >/dev/null 2>&1 && bash "$DIR/menubar/build.sh" "$DIR" 2>&1 | tail -1
+    else
+      echo "This copy was installed without git. Re-run install.command from a fresh download to upgrade."
+    fi
+    ;;
+  help|-h|--help)
+    sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+    echo
+    python3 "$CU" --help
+    ;;
+  *)
+    python3 "$CU" "$@"
+    ;;
+esac

@@ -1,0 +1,12 @@
+{
+  "order": ["system", "paper", "graphite", "console", "midnight", "sand", "mono"],
+  "themes": {
+    "system":   {"name": "System",   "scheme": null},
+    "paper":    {"name": "Paper",    "scheme": "light", "bg": "#f2f1ec", "sf": "#fbfaf7", "sf2": "#f5f4ef", "ink": "#151513", "ink2": "#54524c", "mut": "#8a877e", "line": "#dedbd2", "grid": "#e9e6de", "seg": "#e3e0d7", "ok": "#2f9e44", "warn": "#e0a100", "hot": "#d8352b", "sel": "#d9e6f5", "accent": "#2a78d6"},
+    "graphite": {"name": "Graphite", "scheme": "dark",  "bg": "#121311", "sf": "#1a1b19", "sf2": "#202120", "ink": "#f1efe8", "ink2": "#b9b6ad", "mut": "#7d7a72", "line": "#2b2c29", "grid": "#262724", "seg": "#2a2b28", "ok": "#3fbf58", "warn": "#f0b428", "hot": "#f0483c", "sel": "#2b3f57", "accent": "#3987e5"},
+    "console":  {"name": "Console",  "scheme": "dark",  "bg": "#0d0f0e", "sf": "#151816", "sf2": "#1b1f1c", "ink": "#e8efe6", "ink2": "#a9b5a6", "mut": "#6f7a6c", "line": "#24302a", "grid": "#1f2924", "seg": "#1f2723", "ok": "#38d66b", "warn": "#f5b400", "hot": "#ff4d3d", "sel": "#1f3d2c", "accent": "#38d66b"},
+    "midnight": {"name": "Midnight", "scheme": "dark",  "bg": "#0e1220", "sf": "#161b2c", "sf2": "#1c2235", "ink": "#e6e9f4", "ink2": "#aab1c7", "mut": "#6e7691", "line": "#262d44", "grid": "#222940", "seg": "#252c43", "ok": "#4ac6ff", "warn": "#ffbf47", "hot": "#ff5c7a", "sel": "#27385e", "accent": "#4ac6ff"},
+    "sand":     {"name": "Sand",     "scheme": "light", "bg": "#f5ead8", "sf": "#fdf6ea", "sf2": "#f7efe0", "ink": "#2b241b", "ink2": "#6b5f4d", "mut": "#9a8c76", "line": "#e3d5bf", "grid": "#ede2cf", "seg": "#e6dac6", "ok": "#3a8f5b", "warn": "#d18b00", "hot": "#c8412f", "sel": "#ead9b8", "accent": "#b0672a"},
+    "mono":     {"name": "Mono",     "scheme": "light", "bg": "#ffffff", "sf": "#ffffff", "sf2": "#f2f2f2", "ink": "#000000", "ink2": "#333333", "mut": "#6a6a6a", "line": "#cfcfcf", "grid": "#e6e6e6", "seg": "#e2e2e2", "ok": "#4a4a4a", "warn": "#9a9a9a", "hot": "#000000", "sel": "#dcdcdc", "accent": "#000000"}
+  }
+}

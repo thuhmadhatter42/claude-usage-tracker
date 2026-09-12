@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+.remember/
+jusage.app/
+*.tmp
+*.log
