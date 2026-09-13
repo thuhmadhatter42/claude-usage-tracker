@@ -33,17 +33,14 @@ echo
 
 # ---------- 2. dependencies ----------
 bold "Checking dependencies"
-if [ "$(uname)" != "Darwin" ]; then
-  warn "Not macOS. Needs python3 (3.9+) and git on PATH; continuing without the Xcode check."
+[ "$(uname)" = "Darwin" ] || die "This installer is for macOS (Keychain login, menu bar app). On Linux run claude_usage.py directly: scan / report work, live reads ~/.claude/.credentials.json."
+if xcode-select -p >/dev/null 2>&1; then
+  ok "Xcode Command Line Tools (gives you git + python3 + swiftc)"
 else
-  if xcode-select -p >/dev/null 2>&1; then
-    ok "Xcode Command Line Tools (gives you git + python3)"
-  else
-    warn "Xcode Command Line Tools missing — Apple's install window is opening. Click Install and wait."
-    xcode-select --install >/dev/null 2>&1
-    until xcode-select -p >/dev/null 2>&1; do sleep 10; done
-    ok "Command Line Tools installed"
-  fi
+  warn "Xcode Command Line Tools missing — Apple's install window is opening. Click Install and wait."
+  xcode-select --install >/dev/null 2>&1
+  until xcode-select -p >/dev/null 2>&1; do sleep 10; done
+  ok "Command Line Tools installed"
 fi
 
 if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)'; then
@@ -90,7 +87,7 @@ echo
 
 # ---------- 3b. menu bar app ----------
 bold "Menu bar app"
-if [ "$(uname)" = "Darwin" ] && command -v swiftc >/dev/null 2>&1; then
+if command -v swiftc >/dev/null 2>&1; then
   BUILD_LOG="$(mktemp -t jusage-build)"
   if bash "$DEST/menubar/build.sh" "$DEST" >"$BUILD_LOG" 2>&1; then
     ok "built $DEST/jusage.app (lives in your menu bar; 'Open at login' is a checkbox inside it)"
@@ -122,11 +119,7 @@ else
   if [ -n "$rep" ]; then
     python3 "$DEST/claude_usage.py" share --reports "$rep" --user "$USER_NAME" && python3 "$DEST/claude_usage.py" dashboard
   else
-    python3 - "$USER_NAME" <<'EOF'
-import json, os, sys
-p = os.path.expanduser("~/.claude-usage/config.json"); d = json.load(open(p)) if os.path.exists(p) else {}
-d["user"] = sys.argv[1]; json.dump(d, open(p, "w"), indent=2)
-EOF
+    python3 "$DEST/claude_usage.py" set-user "$USER_NAME"
     warn "Skipped sharing. Later:  jusage share --reports <folder> --user $USER_NAME"
   fi
 fi

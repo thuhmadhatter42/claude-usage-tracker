@@ -91,13 +91,10 @@ func meterLabel(_ n: String) -> String {
      "seven_day_sonnet": "7 days, Sonnet", "seven_day_fable": "7 days, Fable"][n] ?? n.replacingOccurrences(of: "_", with: " ")
 }
 func resetsText(_ iso: String?) -> String {
-    guard let iso, let t = ISO8601DateFormatter().date(from: iso) ?? ISO8601DateFormatter.withFraction.date(from: iso) else { return "" }
+    guard let iso, let t = ISO8601DateFormatter.minutes.date(from: iso) else { return "" }
     let left = max(Int(t.timeIntervalSinceNow) / 60, 0)
     let f = DateFormatter(); f.dateFormat = Calendar.current.isDateInToday(t) ? "HH:mm" : "EEE HH:mm"
     return "resets \(f.string(from: t)), in \(left / 60)h \(String(format: "%02d", left % 60))m"
-}
-extension ISO8601DateFormatter {
-    static let withFraction: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()
 }
 
 // MARK: - model
@@ -154,11 +151,13 @@ final class Model: ObservableObject {
                 try p.run()
                 // A Keychain consent dialog or a hung network call must not wedge refresh forever.
                 DispatchQueue.global().asyncAfter(deadline: .now() + 90) { if p.isRunning { p.terminate() } }
-                p.waitUntilExit()
+                // Drain both pipes before waiting: a child blocked on a full 64 KB pipe never exits.
                 let data = out.fileHandleForReading.readDataToEndOfFile()
+                let errData = err.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
                 if p.terminationStatus == 0 { result = try JSONDecoder().decode(Feed.self, from: data) }
                 else if p.terminationReason == .uncaughtSignal { msg = "Refresh took over 90 s and was stopped. Is a Keychain prompt waiting?" }
-                else { msg = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.split(separator: "\n").last.map(String.init) ?? "exit \(p.terminationStatus)" }
+                else { msg = String(data: errData, encoding: .utf8)?.split(separator: "\n").last.map(String.init) ?? "exit \(p.terminationStatus)" }
             } catch { msg = error.localizedDescription }
             DispatchQueue.main.async {
                 self.loading = false; self.lastRefresh = Date()
@@ -216,7 +215,7 @@ enum Alerts {
     static func check(previous: Feed?, now: Feed) {
         guard let previous else { return }
         setup()
-        for (acct, lv) in now.live {
+        for (acct, lv) in now.live where lv.stale != true {
             for m in lv.meters {
                 guard let old = previous.live[acct]?.meters.first(where: { $0.name == m.name }) else { continue }
                 let label = "\(acct) · \(meterLabel(m.name))"
@@ -419,8 +418,10 @@ struct ContentView: View {
                         ForEach(lives, id: \.key) { acct, lv in
                             let tag = f.live.count > 1 ? "\(acct) · " : ""
                             ForEach(lv.meters) { MeterRow(meter: $0, tag: tag, th: th, forecast: model.shown("sec:forecast")) }
-                            if lv.meters.isEmpty, let e = lv.error {
-                                Label(e, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                            if let e = lv.error {
+                                // meters present + error = the last good reading; say when it is from and why it stopped
+                                let when = lv.meters.isEmpty ? "" : "Stale since \((lv.fetched ?? "").dropFirst(11).prefix(5)): "
+                                Label(when + e, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary).lineLimit(3)
                             }
                         }
                         if !anyMeters && lives.isEmpty {

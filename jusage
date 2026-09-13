@@ -6,7 +6,7 @@
 #   jusage app        open the menu bar app
 #   jusage upgrade    pull the latest version from GitHub (rebuilds the menu bar app)
 #   jusage help       full option list
-DIR="$(cd "$(dirname "$(readlink "${BASH_SOURCE[0]}" || echo "${BASH_SOURCE[0]}")")" && pwd)"
+DIR="$(cd "$(dirname "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")" && pwd -P)"
 CU="$DIR/claude_usage.py"
 CFG="$HOME/.claude-usage/config.json"
 

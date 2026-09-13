@@ -13,7 +13,7 @@ Commands
   dashboard   build one HTML page from every JSON in the reports folder
   update      scan + share + dashboard (the one to put on a schedule)
 """
-import argparse, datetime as dt, glob, json, os, socket, sqlite3, sys
+import argparse, datetime as dt, functools, glob, json, os, socket, sqlite3, sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -79,6 +79,11 @@ def whoami(args):
     return user, socket.gethostname().split(".")[0]
 
 
+def cmd_set_user(args):
+    cfg = load_config(); cfg["user"] = args.name; save_config(cfg)
+    print(f"you are shown as {args.name!r}")
+
+
 # ---------- pricing ----------
 def load_pricing():
     table = json.loads((HERE / "pricing.json").read_text())
@@ -103,12 +108,16 @@ def cost_usd(row, rate):
 
 # ---------- db ----------
 def db():
+    """One connection per process. 10 s busy timeout + WAL so the menu bar's poll and a CLI run
+    never see 'database is locked'."""
     state_dir()
-    c = sqlite3.connect(DB)
+    c = sqlite3.connect(DB, timeout=10)
     try:
         os.chmod(DB, 0o600)
     except OSError:
         pass
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
     c.executescript("""
     CREATE TABLE IF NOT EXISTS records (
       key TEXT PRIMARY KEY, ts TEXT NOT NULL, day TEXT NOT NULL,
@@ -125,19 +134,26 @@ def db():
       PRIMARY KEY (ts, account, meter)
     ) STRICT;
     """)
+    # Rows from backup copies of a config dir (scanned before 0.1.4 excluded them) are deleted once here.
+    c.execute("DELETE FROM records WHERE lower(account) LIKE '%.bak%' OR lower(account) LIKE '%backup%' OR lower(account) LIKE '%.old%'")
+    c.commit()
     return c
 
 
 # ---------- scan ----------
+@functools.lru_cache(maxsize=None)
 def config_dirs():
+    """Every Claude Code config dir on this Mac: ~/.claude* with a projects/ folder, plus
+    $CLAUDE_CONFIG_DIR. Backup copies (.bak / backup / .old in the name) are not accounts."""
     dirs = {p for p in HOME.glob(".claude*") if (p / "projects").is_dir()
             and not any(x in p.name.lower() for x in (".bak", "backup", ".old"))}
     env = os.environ.get("CLAUDE_CONFIG_DIR")
     if env and (Path(env) / "projects").is_dir():
-        dirs.add(Path(env))
-    return sorted(dirs)
+        dirs.add(Path(env).resolve())
+    return tuple(sorted(dirs))
 
 
+@functools.lru_cache(maxsize=None)
 def acct_label(name):
     """'.claude' -> 'Sam #1', '.claude-work' -> 'Sam #2' (your name from config, order = sorted dir names)."""
     names = [d.name for d in config_dirs()]
@@ -147,13 +163,12 @@ def acct_label(name):
     return name
 
 
-def forecast(account, meter_name, pct_now, resets_at):
+def forecast(c, account, meter_name, pct_now, resets_at):
     """Learn what one percent of a limit costs, from logged readings vs api-equivalent spend
     between them, then say how much room is left and when the wall lands at the recent pace.
     Returns None until there are enough readings that moved the meter."""
     if pct_now is None:
         return None
-    c = db(); c.row_factory = sqlite3.Row
     pricing = load_pricing()
     # readings belong to the same limit period when they share a reset time (to the minute)
     log = c.execute("SELECT ts, pct FROM meter_log WHERE account=? AND meter=? AND COALESCE(substr(resets_at,1,16),'')=? ORDER BY ts",
@@ -223,8 +238,8 @@ def parse_file(path, account):
                    u.get("cache_read_input_tokens") or 0, u.get("output_tokens") or 0)
 
 
-def cmd_scan(args):
-    c = db()
+def scan(c, full=False):
+    """Ingest every changed transcript file. Returns (files read, new rows, total rows)."""
     seen = dict(c.execute("SELECT path, size || ':' || mtime FROM files"))
     new_rows = files_read = 0
     for cdir in config_dirs():
@@ -232,7 +247,7 @@ def cmd_scan(args):
         for path in glob.glob(str(cdir / "projects" / "**" / "*.jsonl"), recursive=True):
             st = os.stat(path)
             sig = f"{st.st_size}:{st.st_mtime}"
-            if seen.get(path) == sig and not args.full:
+            if seen.get(path) == sig and not full:
                 continue
             files_read += 1
             rows = list(parse_file(path, account))
@@ -240,7 +255,11 @@ def cmd_scan(args):
             new_rows += cur.rowcount if cur.rowcount > 0 else 0
             c.execute("INSERT OR REPLACE INTO files VALUES (?,?,?)", (path, st.st_size, st.st_mtime))
     c.commit()
-    n = c.execute("SELECT count(*) FROM records").fetchone()[0]
+    return files_read, new_rows, c.execute("SELECT count(*) FROM records").fetchone()[0]
+
+
+def cmd_scan(args):
+    files_read, new_rows, n = scan(db(), full=args.full)
     print(f"scanned {files_read} changed files across {len(config_dirs())} config dir(s); "
           f"{new_rows} new records, {n} total")
 
@@ -264,10 +283,7 @@ def fetch(c, since=None, account=None):
         conds.append("account = ?"); params.append(account)
     if conds:
         q += " WHERE " + " AND ".join(conds)
-    c.row_factory = sqlite3.Row
-    rows = c.execute(q + " ORDER BY ts", params).fetchall()
-    # Rows scanned before backup dirs were excluded (0.1.4) still sit in the db; never report them.
-    return [r for r in rows if not any(x in r["account"].lower() for x in (".bak", "backup", ".old"))]
+    return c.execute(q + " ORDER BY ts", params).fetchall()
 
 
 def zero():
@@ -315,65 +331,58 @@ def blocks_by_account(rows):
 # ---------- live meters (Claude's own 5-hour / 7-day gauges) ----------
 LIVE = STATE / "live.json"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+LIVE_TTL_MIN = 15   # ClaudeBar saw 1-hour 429s from polling this endpoint; 15 min is plenty fresh
 
 
-def keychain_services(cdir):
-    """Claude Code keeps its claude.ai login in the macOS Keychain under
-    'Claude Code-credentials-<sha256(config dir)[:8]>', one item per config dir. The unsuffixed
-    'Claude Code-credentials' item is a leftover from older builds and may hold a *different*
-    account's login (2026-09-12: it held account #2 and made both meters read the same), so it is
-    never consulted."""
+class LoginError(Exception):
+    """No usable claude.ai login for a config dir. The message is what the user should do."""
+
+
+def keychain_service(cdir):
+    """Claude Code keeps each config dir's claude.ai login in the macOS Keychain under
+    'Claude Code-credentials-<sha256(config dir)[:8]>'. The unsuffixed 'Claude Code-credentials'
+    item is a leftover from older builds and can hold a different account's login, so it is never read."""
     import hashlib
-    return ["Claude Code-credentials-" + hashlib.sha256(str(cdir).encode()).hexdigest()[:8]]
+    return "Claude Code-credentials-" + hashlib.sha256(str(cdir).encode()).hexdigest()[:8]
 
 
 def read_credentials(cdir):
-    """-> (where, creds_dict). `where` is a Keychain service name or a file path; (None, None) if absent.
-    When several stores exist, the one whose token expires latest is the live one."""
-    import subprocess
-    found = []
+    """The credentials JSON Claude Code wrote for this config dir: the Keychain on macOS,
+    <config dir>/.credentials.json elsewhere. Read only, never written."""
     if sys.platform == "darwin":
-        for svc in keychain_services(cdir):
-            r = subprocess.run(["security", "find-generic-password", "-s", svc, "-w"], capture_output=True, text=True)
-            if r.returncode == 0 and r.stdout.strip():
-                try:
-                    found.append((svc, json.loads(r.stdout.strip())))
-                except json.JSONDecodeError:
-                    pass
-    f = cdir / ".credentials.json"
-    if f.exists():
-        try:
-            found.append((str(f), json.loads(f.read_text())))
-        except json.JSONDecodeError:
-            pass
-    found = [x for x in found if (x[1].get("claudeAiOauth") or {}).get("accessToken")]
-    if not found:
-        return None, None
-    return max(found, key=lambda x: (x[1].get("claudeAiOauth") or {}).get("expiresAt") or 0)
+        import subprocess
+        r = subprocess.run(["security", "find-generic-password", "-s", keychain_service(cdir), "-w"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise LoginError("no claude.ai login in the Keychain for this config dir; run `claude /login` there")
+        raw = r.stdout.strip()
+    else:
+        f = cdir / ".credentials.json"
+        if not f.exists():
+            raise LoginError(f"no claude.ai login ({f} missing); run `claude /login` there")
+        raw = f.read_text()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise LoginError("the stored login is not valid JSON; run `claude /login` for this config dir") from None
 
 
-def oauth_token(cdir):
-    _, creds = read_credentials(cdir)
-    if not creds:
-        return None
-    oauth = creds.get("claudeAiOauth") or {}
+def access_token(cdir):
+    oauth = (read_credentials(cdir).get("claudeAiOauth") or {})
+    tok = oauth.get("accessToken")
+    if not tok:
+        raise LoginError("the stored login has no access token; run `claude /login` for this config dir")
     exp = oauth.get("expiresAt")
     if exp and dt.datetime.now().timestamp() * 1000 >= float(exp):
-        return "expired"
-    return oauth.get("accessToken")
-
-
-EXPIRED = ("Claude Code's login for this config dir has expired; jusage never renews it (that would rotate "
-           "the token behind Claude Code's back). Open a Claude Code window on this account and it refreshes itself.")
+        raise LoginError("Claude Code's login has expired; jusage never renews it (that would rotate the token "
+                         "behind Claude Code's back). Open a Claude Code window on this account and it refreshes itself.")
+    return tok
 
 
 def fetch_live(cdir):
+    """-> the usage endpoint's JSON. Raises LoginError (no/expired login) or RuntimeError (transport)."""
     import urllib.request, urllib.error
-    tok = oauth_token(cdir)
-    if not tok:
-        return {"error": "no claude.ai login found for this config dir"}
-    if tok == "expired":
-        return {"error": EXPIRED}
+    tok = access_token(cdir)
     req = urllib.request.Request(USAGE_URL, headers={"Authorization": f"Bearer {tok}",
                                  "anthropic-beta": "oauth-2025-04-20", "Accept": "application/json",
                                  "User-Agent": f"jusage/{VERSION}"})
@@ -387,118 +396,148 @@ def fetch_live(cdir):
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         if e.code == 401:
-            return {"error": EXPIRED}
+            raise LoginError("Anthropic rejected the stored login (401); open a Claude Code window on this account") from None
         if e.code == 429:
-            return {"error": "rate limited by Anthropic (429); showing the last reading", "retry_after": e.headers.get("Retry-After")}
-        return {"error": f"HTTP {e.code}: {e.read().decode()[:200]}"}
-    except Exception as e:  # noqa: BLE001
-        return {"error": str(e)}
+            raise RuntimeError("rate limited by Anthropic (429)") from None
+        raise RuntimeError(f"HTTP {e.code}: {e.read().decode()[:200]}") from None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise RuntimeError(str(e)) from None
+
+
+def iso_minutes(iso):
+    """Any ISO-8601 the endpoint sends -> local time, to the second, one fixed shape for every consumer."""
+    if not iso:
+        return None
+    try:
+        return dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().isoformat(timespec="seconds")
+    except ValueError:
+        return None
 
 
 def meters(data):
-    """Normalise whatever the endpoint returns into [(name, pct, resets_at_iso)].
-    Handles the legacy five_hour/seven_day/seven_day_<model> objects and the newer
-    `limits` array (kind session / weekly_all / weekly_scoped, with percent + scope.model)."""
-    out, seen = [], set()
+    """Normalise the endpoint's reply into [(name, pct, resets_at_local_iso)].
+    The `limits` array is authoritative (kind session / weekly_all / weekly_scoped + scope.model);
+    replies without it carry the older five_hour / seven_day objects instead."""
+    out = []
     if not isinstance(data, dict):
         return out
-    # The newer `limits` array is authoritative: session, weekly_all, weekly_scoped (per model).
-    for e in data.get("limits") or []:
-        if not isinstance(e, dict) or e.get("percent") is None:
-            continue
-        kind = e.get("kind", "")
-        mdl = (e.get("scope") or {}).get("model") or {}
-        model = (mdl.get("display_name") or mdl.get("displayName") or "").split(" ")[0].lower()
-        name = {"session": "five_hour", "weekly_all": "seven_day"}.get(kind) or (f"seven_day_{model}" if model else None)
-        if name and name not in seen:
-            out.append((name, float(e["percent"]), e.get("resets_at"))); seen.add(name)
-    # Legacy top-level objects (older replies). Anything else at the top level is an internal,
-    # codenamed bucket (nimbus_quill, tangelo, ...) or the extra-usage wallet, not a limit.
+    limits = [e for e in data.get("limits") or [] if isinstance(e, dict) and e.get("percent") is not None]
+    if limits:
+        seen = set()
+        for e in limits:
+            mdl = (e.get("scope") or {}).get("model") or {}
+            model = (mdl.get("display_name") or mdl.get("displayName") or "").split(" ")[0].lower()
+            name = {"session": "five_hour", "weekly_all": "seven_day"}.get(e.get("kind", "")) or (f"seven_day_{model}" if model else None)
+            if name and name not in seen:
+                out.append((name, float(e["percent"]), iso_minutes(e.get("resets_at")))); seen.add(name)
+        return out
     for k in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"):
         v = data.get(k)
-        if k not in seen and isinstance(v, dict) and v.get("utilization") is not None:
-            out.append((k, float(v["utilization"]), v.get("resets_at"))); seen.add(k)
+        if isinstance(v, dict) and v.get("utilization") is not None:
+            out.append((k, float(v["utilization"]), iso_minutes(v.get("resets_at"))))
     return out
 
 
 def until(iso):
     if not iso:
         return ""
-    try:
-        t = dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
-    except ValueError:
-        return iso
+    t = dt.datetime.fromisoformat(iso)
     left = t - dt.datetime.now().astimezone()
     h, m = divmod(max(int(left.total_seconds()) // 60, 0), 60)
     return f"resets in {h}h {m:02d}m ({t:%a %H:%M})"
 
 
-LIVE_TTL_MIN = 15   # ClaudeBar saw 1-hour 429s from polling this endpoint; 15 min is plenty fresh
-
-
-def cmd_live(args):
-    state_dir()
-    store = json.loads(LIVE.read_text()) if LIVE.exists() else {}
-    now = dt.datetime.now().astimezone()
-    for cdir in config_dirs():
-        prev = store.get(cdir.name)
-        if prev and not getattr(args, "force", False) and "error" not in prev["data"]:
-            age = (now - dt.datetime.fromisoformat(prev["fetched"])).total_seconds() / 60
-            if age < LIVE_TTL_MIN:
-                data = prev["data"]
-                print(f"\n{acct_label(cdir.name)} ({cdir.name})  cached {age:.0f} min ago, --force to refetch")
-                for name, pct, reset in meters(data):
-                    print(f"  {name.replace('_', ' '):<26} {pct:5.1f}%   {until(reset)}")
-                continue
-        data = fetch_live(cdir)
-        if "error" not in data:
-            c_ = db()
-            c_.executemany("INSERT OR IGNORE INTO meter_log VALUES (?,?,?,?,?)",
-                           [(now.isoformat(timespec="seconds"), cdir.name, n, p_, r_) for n, p_, r_ in meters(data)])
-            c_.commit()
-        if "error" in data and prev and "error" not in prev["data"]:
-            data = {**prev["data"], "stale": True, "error_now": data["error"]}   # keep last good reading
-            store[cdir.name] = {"fetched": prev["fetched"], "data": data}
-        else:
-            store[cdir.name] = {"fetched": now.isoformat(timespec="seconds"), "data": data}
-        print(f"\n{acct_label(cdir.name)} ({cdir.name})" + (f"  STALE reading from {store[cdir.name]['fetched'][11:16]}: {data['error_now']}" if data.get("stale") else ""))
-        if "error" in data:
-            print(f"  {data['error']}")
-            continue
-        ms = meters(data)
-        if not ms:
-            print("  unexpected reply, raw keys:", ", ".join(data.keys()))
-        for name, pct, reset in ms:
-            bar = "█" * int(pct // 5) + "░" * (20 - int(pct // 5))
-            print(f"  {name.replace('_', ' '):<26} {bar} {pct:5.1f}%   {until(reset)}")
-    write_private(LIVE, json.dumps(store, indent=1) + "\n")
-    if getattr(args, "raw", False):
-        print(json.dumps(store, indent=1))
-
-
-def live_for_share():
+def load_live():
+    """live.json: {config dir name: {"fetched": iso, "data": last good reply | None, "error": str | None}}.
+    `data` is the last reply that succeeded; `error` is set when the most recent attempt failed,
+    so a reading with both is a stale one and every consumer says so."""
     if not LIVE.exists():
         return {}
     store = json.loads(LIVE.read_text())
-    return {acct_label(acct): {"fetched": v["fetched"],
-                               "meters": [{"name": n, "pct": p, "resets_at": r, "forecast": forecast(acct, n, p, r)} for n, p, r in meters(v["data"])],
-                               "error": v["data"].get("error")} for acct, v in store.items()}
+    # entries written before 0.1.19 kept the error inside data; read them, write the one shape
+    for v in store.values():
+        d = v.get("data")
+        if isinstance(d, dict) and ("error" in d or "stale" in d):
+            v["error"] = d.get("error_now") or d.get("error")
+            v["data"] = None if "error" in d else {k: x for k, x in d.items() if k not in ("stale", "error_now")}
+        v.setdefault("error", None)
+    return store
+
+
+def refresh_live(c, force=False, log=print):
+    """Fetch every account's meters unless the cached reading is younger than LIVE_TTL_MIN.
+    Returns the store; log() gets one line per account (nothing when quiet)."""
+    store = load_live()
+    now = dt.datetime.now().astimezone()
+    for cdir in config_dirs():
+        prev = store.get(cdir.name)
+        if prev and prev["data"] and not prev["error"] and not force:
+            age = (now - dt.datetime.fromisoformat(prev["fetched"])).total_seconds() / 60
+            if age < LIVE_TTL_MIN:
+                log(cdir.name, prev, f"cached {age:.0f} min ago, --force to refetch")
+                continue
+        try:
+            data = fetch_live(cdir)
+        except (LoginError, RuntimeError) as e:
+            store[cdir.name] = {"fetched": prev["fetched"] if prev else None, "data": prev["data"] if prev else None, "error": str(e)}
+        else:
+            store[cdir.name] = {"fetched": now.isoformat(timespec="seconds"), "data": data, "error": None}
+            c.executemany("INSERT OR IGNORE INTO meter_log VALUES (?,?,?,?,?)",
+                          [(now.isoformat(timespec="seconds"), cdir.name, n, p_, r_) for n, p_, r_ in meters(data)])
+            c.commit()
+        log(cdir.name, store[cdir.name], "")
+    write_private(LIVE, json.dumps(store, indent=1) + "\n")
+    return store
+
+
+def live_view(c, store, with_forecast=True):
+    """The one shape the menu bar, the shared report and the dashboard consume:
+    {account label: {fetched, stale, error, meters: [{name, pct, resets_at, forecast}]}}."""
+    out = {}
+    for acct, v in store.items():
+        ms = meters(v["data"]) if v["data"] else []
+        out[acct_label(acct)] = {
+            "fetched": v["fetched"], "stale": bool(v["error"] and ms), "error": v["error"],
+            "meters": [{"name": n, "pct": p, "resets_at": r,
+                        "forecast": forecast(c, acct, n, p, r) if with_forecast else None} for n, p, r in ms]}
+    return out
+
+
+def cmd_live(args):
+    c = db()
+
+    def show(name, entry, note):
+        head = f"\n{acct_label(name)} ({name})"
+        if note:
+            head += f"  {note}"
+        if entry["error"] and entry["data"]:
+            head += f"  STALE reading from {entry['fetched'][11:16]}: {entry['error']}"
+        print(head)
+        if not entry["data"]:
+            print(f"  {entry['error']}")
+            return
+        ms = meters(entry["data"])
+        if not ms:
+            print("  unexpected reply, raw keys:", ", ".join(entry["data"].keys()))
+        for n, pct, reset in ms:
+            bar = "█" * int(pct // 5) + "░" * (20 - int(pct // 5))
+            print(f"  {n.replace('_', ' '):<26} {bar} {pct:5.1f}%   {until(reset)}")
+
+    store = refresh_live(c, force=args.force, log=show)
+    if args.raw:
+        print(json.dumps(store, indent=1))
 
 
 # ---------- menu bar feed ----------
 def cmd_menu(args):
-    """Everything the menu bar app shows, as one JSON object on stdout."""
-    args.full = False
-    import io, contextlib
-    with contextlib.redirect_stdout(io.StringIO()):
-        cmd_scan(args)
-        try:
-            cmd_live(args)
-        except Exception:  # noqa: BLE001
-            pass
+    """Everything the menu bar app shows, as one JSON object on stdout. Any failure exits non-zero
+    with the reason on stderr, which the app shows in place of the numbers."""
+    c = db()
+    scan(c, full=False)
+    store = refresh_live(c, force=args.force, log=lambda *a: None)
     pricing = load_pricing()
     today = dt.date.today().isoformat()
-    rows = fetch(db(), since_date("7d"))
+    rows = fetch(c, since_date("7d"))
     day, week, accts, models, projs = zero(), zero(), defaultdict(zero), defaultdict(zero), defaultdict(zero)
     for r in rows:
         add(week, r, pricing)
@@ -512,18 +551,13 @@ def cmd_menu(args):
         for r in b["rows"]: add(a, r, pricing)
         windows.append({"account": acct_label(acct), "start": b["start"].isoformat(timespec="minutes"), "end": b["end"].isoformat(timespec="minutes"),
                         "tokens": total_tokens(a), "cost": round(a["cost"], 2), "open": dt.datetime.now().astimezone() < b["end"]})
-    live = {}
-    if LIVE.exists():
-        for acct, v in json.loads(LIVE.read_text()).items():
-            live[acct_label(acct)] = {"fetched": v["fetched"], "stale": bool(v["data"].get("stale")), "error": v["data"].get("error"),
-                                      "meters": [{"name": n, "pct": p, "resets_at": r_, "forecast": forecast(acct, n, p, r_)}
-                                                 for n, p, r_ in meters(v["data"])]}
+    live = live_view(c, store)
     # last three calendar months, newest first
     months = []
     first = dt.date.today().replace(day=1)
     for _ in range(3):
         key = first.strftime("%Y-%m")
-        mrows = [r for r in fetch(db(), key + "-01") if r["day"].startswith(key)]
+        mrows = [r for r in fetch(c, key + "-01") if r["day"].startswith(key)]
         tot, mm, pp = zero(), defaultdict(zero), defaultdict(zero)
         for r in mrows:
             add(tot, r, pricing); add(mm[r["model"]], r, pricing); add(pp[r["project"]], r, pricing)
@@ -621,10 +655,10 @@ def cmd_report(args):
 
 
 # ---------- share ----------
-def build_summary(user, host, pricing, share_projects=False):
+def build_summary(c, user, host, pricing, share_projects=False):
     """The shared report. Project folder names are included only when share_projects is set
     (`share --projects`, remembered); by default nothing about what you work on leaves the machine."""
-    rows = fetch(db(), since_date("90d"))
+    rows = fetch(c, since_date("90d"))
     days, models = defaultdict(zero), defaultdict(lambda: defaultdict(zero))
     accts = defaultdict(lambda: defaultdict(zero))
     projs = defaultdict(lambda: defaultdict(zero))
@@ -647,7 +681,7 @@ def build_summary(user, host, pricing, share_projects=False):
         "user": user, "host": host, "tool_version": VERSION,
         "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "accounts": sorted(acct_label(a_) for a_ in accounts),
-        "live": live_for_share(),
+        "live": live_view(c, load_live()),
         "days": {d: {**{k: a[k] for k in COLS}, "calls": a["calls"], "cost": round(a["cost"], 2),
                      "models": {m: {**{k: x[k] for k in COLS}, "tokens": total_tokens(x), "calls": x["calls"], "cost": round(x["cost"], 2)}
                                 for m, x in models[d].items()},
@@ -667,7 +701,10 @@ def cmd_share(args):
         cfg["share_projects"] = bool(args.projects); save_config(cfg)
     share_projects = bool(cfg.get("share_projects"))
     out = reports_dir(args) / f"{user}@{host}.json"
-    out.write_text(json.dumps(build_summary(user, host, load_pricing(), share_projects), indent=1) + "\n")
+    # temp file + rename: a sync client or another Mac's dashboard never sees a half-written report
+    tmp = out.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(build_summary(db(), user, host, load_pricing(), share_projects), indent=1) + "\n")
+    os.replace(tmp, out)
     print(f"wrote {out}" + ("" if share_projects else "  (project names not shared; `share --projects` to include them)"))
 
 
@@ -692,13 +729,8 @@ def cmd_dashboard(args):
 
 
 def cmd_update(args):
-    args.full = False
-    cmd_scan(args)
-    try:
-        cmd_live(args)
-    except Exception as e:  # noqa: BLE001 — meters are a bonus, never block the update
-        print(f"live meters skipped: {e}")
-    cmd_share(args); args.out = None; cmd_dashboard(args)
+    args.full = False; args.force = False; args.raw = False
+    cmd_scan(args); cmd_live(args); cmd_share(args); args.out = None; cmd_dashboard(args)
 
 
 # ---------- main ----------
@@ -717,6 +749,8 @@ def main():
     r.add_argument("--by", default="day", choices=["day", "model", "account", "project", "blocks"])
     r.add_argument("--account", help="only this config dir name, e.g. .claude-newaccount")
     r.add_argument("--last", type=int, default=12, help="how many 5h blocks (with --by blocks)")
+    su = sub.add_parser("set-user", help="your name as shown to the others (remembered; `share --user` does the same)")
+    su.add_argument("name")
     for name in ("share", "dashboard", "update"):
         x = sub.add_parser(name)
         x.add_argument("--reports", help="shared reports folder (remembered after first use)")
@@ -731,7 +765,8 @@ def main():
     args = p.parse_args()
     if args.cmd == "report" and args.since == "all":
         args.since = None
-    {"scan": cmd_scan, "live": cmd_live, "menu-json": cmd_menu, "report": cmd_report, "share": cmd_share, "dashboard": cmd_dashboard, "update": cmd_update}[args.cmd](args)
+    {"scan": cmd_scan, "live": cmd_live, "menu-json": cmd_menu, "report": cmd_report, "share": cmd_share,
+     "dashboard": cmd_dashboard, "update": cmd_update, "set-user": cmd_set_user}[args.cmd](args)
 
 
 if __name__ == "__main__":

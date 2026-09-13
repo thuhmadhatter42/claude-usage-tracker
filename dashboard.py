@@ -260,6 +260,8 @@ def render(reps, version):
             for m in lv.get("meters", []):
                 meters.append(meter_html(m["name"], m["pct"], m.get("resets_at"), tag, fc=m.get("forecast"), key=acct))
         fetched = next((html.escape(str(lv["fetched"])[11:16]) for lv in live.values() if lv.get("fetched") and lv.get("meters")), None)
+        if fetched and any(lv.get("stale") for lv in live.values()):
+            fetched += " (stale)"
         meters_html = (f"<div class=meters>{''.join(meters)}</div>" if meters else
                        f"<div class=meters>{meter_html('meters', 0, None, err='run jusage live once to light these up')}</div>")
         strips.append(f"<section class='panel today' data-k='person:{html.escape(u)}' style='border-top:3px solid var(--s{i})'>"
