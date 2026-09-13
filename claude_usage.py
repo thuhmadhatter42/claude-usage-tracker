@@ -317,19 +317,14 @@ LIVE = STATE / "live.json"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
 
-CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"      # Claude Code's public OAuth client id
-REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
-
-
 def keychain_services(cdir):
-    """Claude Code keeps its claude.ai login in the macOS Keychain. Older builds used the plain
-    service name for ~/.claude and '-<sha256(dir)[:8]>' for other config dirs; newer builds may
-    hash every dir. Try both and let the freshest win."""
+    """Claude Code keeps its claude.ai login in the macOS Keychain under
+    'Claude Code-credentials-<sha256(config dir)[:8]>', one item per config dir. The unsuffixed
+    'Claude Code-credentials' item is a leftover from older builds and may hold a *different*
+    account's login (2026-09-12: it held account #2 and made both meters read the same), so it is
+    never consulted."""
     import hashlib
-    names = ["Claude Code-credentials-" + hashlib.sha256(str(cdir).encode()).hexdigest()[:8]]
-    if cdir == HOME / ".claude":
-        names.append("Claude Code-credentials")
-    return names
+    return ["Claude Code-credentials-" + hashlib.sha256(str(cdir).encode()).hexdigest()[:8]]
 
 
 def read_credentials(cdir):
@@ -357,82 +352,28 @@ def read_credentials(cdir):
     return max(found, key=lambda x: (x[1].get("claudeAiOauth") or {}).get("expiresAt") or 0)
 
 
-def write_credentials(where, creds):
-    """Put the renewed token back exactly where Claude Code reads it, so it stays logged in."""
-    import subprocess
-    raw = json.dumps(creds)
-    if where.startswith("Claude Code-credentials"):
-        # Update the very item we read: -U only matches on service AND account, so take the account
-        # attribute from the existing entry. If it cannot be read, refuse rather than create a second
-        # item under a guessed account name.
-        acct = None
-        meta = subprocess.run(["security", "find-generic-password", "-s", where], capture_output=True, text=True)
-        for line in meta.stdout.splitlines():
-            if line.strip().startswith('"acct"<blob>="'):
-                acct = line.split('="', 1)[1].rstrip('"')
-        if acct is None:
-            return False
-        # `-w` as the LAST option makes `security` read the secret from stdin (asked twice), so the
-        # token never appears in the process argument list, where any local process could read it.
-        r = subprocess.run(["security", "add-generic-password", "-U", "-a", acct, "-s", where, "-w"],
-                           input=raw + "\n" + raw + "\n", capture_output=True, text=True)
-        return r.returncode == 0
-    try:
-        write_private(Path(where), raw)
-        return True
-    except OSError:
-        return False
-
-
-def renew_token(cdir):
-    """Exchange the refresh token for a new access token (same flow Claude Code uses) and store it.
-    Returns the new access token, or None. Refresh tokens rotate, so the store is updated in place."""
-    import urllib.request
-    where, creds = read_credentials(cdir)
-    if not creds:
-        return None
-    oauth = creds.get("claudeAiOauth") or {}
-    if not oauth.get("refreshToken"):
-        return None
-    body = json.dumps({"grant_type": "refresh_token", "refresh_token": oauth["refreshToken"], "client_id": CLIENT_ID}).encode()
-    req = urllib.request.Request(REFRESH_URL, data=body, method="POST",
-                                 headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": f"jusage/{VERSION}"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            new = json.loads(r.read().decode())
-    except Exception:  # noqa: BLE001
-        return None
-    if not new.get("access_token"):
-        return None
-    oauth["accessToken"] = new["access_token"]
-    if new.get("refresh_token"):
-        oauth["refreshToken"] = new["refresh_token"]
-    if new.get("expires_in"):
-        oauth["expiresAt"] = int((dt.datetime.now().timestamp() + int(new["expires_in"])) * 1000)
-    creds["claudeAiOauth"] = oauth
-    if not write_credentials(where, creds):
-        # The refresh token just rotated; if the new one is not stored, Claude Code's own login is dead.
-        print(f"WARNING: renewed the login for {cdir.name} but could not write it back to {where}. "
-              f"Run `claude /login` for that account before the next call.", file=sys.stderr)
-    return oauth["accessToken"]
-
-
 def oauth_token(cdir):
     _, creds = read_credentials(cdir)
     if not creds:
         return None
     oauth = creds.get("claudeAiOauth") or {}
     exp = oauth.get("expiresAt")
-    if exp and dt.datetime.now().timestamp() * 1000 + 60_000 >= float(exp):
-        return renew_token(cdir) or oauth.get("accessToken")
+    if exp and dt.datetime.now().timestamp() * 1000 >= float(exp):
+        return "expired"
     return oauth.get("accessToken")
 
 
-def fetch_live(cdir, _retry=True):
+EXPIRED = ("Claude Code's login for this config dir has expired; jusage never renews it (that would rotate "
+           "the token behind Claude Code's back). Open a Claude Code window on this account and it refreshes itself.")
+
+
+def fetch_live(cdir):
     import urllib.request, urllib.error
     tok = oauth_token(cdir)
     if not tok:
         return {"error": "no claude.ai login found for this config dir"}
+    if tok == "expired":
+        return {"error": EXPIRED}
     req = urllib.request.Request(USAGE_URL, headers={"Authorization": f"Bearer {tok}",
                                  "anthropic-beta": "oauth-2025-04-20", "Accept": "application/json",
                                  "User-Agent": f"jusage/{VERSION}"})
@@ -446,9 +387,7 @@ def fetch_live(cdir, _retry=True):
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         if e.code == 401:
-            if _retry and renew_token(cdir):
-                return fetch_live(cdir, _retry=False)
-            return {"error": "Claude login could not be renewed; run `claude /login` for this account, then jusage live --force"}
+            return {"error": EXPIRED}
         if e.code == 429:
             return {"error": "rate limited by Anthropic (429); showing the last reading", "retry_after": e.headers.get("Retry-After")}
         return {"error": f"HTTP {e.code}: {e.read().decode()[:200]}"}
@@ -522,7 +461,7 @@ def cmd_live(args):
             store[cdir.name] = {"fetched": prev["fetched"], "data": data}
         else:
             store[cdir.name] = {"fetched": now.isoformat(timespec="seconds"), "data": data}
-        print(f"\n{acct_label(cdir.name)} ({cdir.name})")
+        print(f"\n{acct_label(cdir.name)} ({cdir.name})" + (f"  STALE reading from {store[cdir.name]['fetched'][11:16]}: {data['error_now']}" if data.get("stale") else ""))
         if "error" in data:
             print(f"  {data['error']}")
             continue

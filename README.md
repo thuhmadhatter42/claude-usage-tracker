@@ -51,9 +51,8 @@ the four things in **Security and privacy** below that they are agreeing to. Do 
 the install went fine:
 
 1. It reads their claude.ai login from the Keychain and macOS may show a permission prompt.
-2. It sends that token to Anthropic's usage endpoint and, when expired, renews it and **writes the
-   new token back into their Keychain** so Claude Code stays logged in. If that write fails they
-   will need to run `claude /login`.
+2. It sends that token to Anthropic's usage endpoint. It never renews or writes the token: an
+   expired login shows as "expired" until they open a Claude Code window on that account.
 3. If they share, the file in the synced folder shows their name, their Mac's name, day totals,
    Claude's meters and the start and end times of every 5-hour window they used Claude in. That is
    a working-hours log. Project folder names go only if `--projects` was given.
@@ -109,15 +108,15 @@ Read this before pointing it at your own login.
   the Keychain doing its job.
 - **Where the token goes.** Two places, both Anthropic, both HTTPS with certificate checks and
   redirects refused: `api.anthropic.com/api/oauth/usage` (the same endpoint Claude Code's own
-  `/usage` uses) and, only when the token has expired, `platform.claude.com/v1/oauth/token` to
-  renew it with the refresh token. Nothing else is contacted. The tool identifies itself with
-  Claude Code's public OAuth client id, because that is the client the token was issued to.
-- **Token renewal writes to your Keychain.** When a login has expired, `live` renews it and stores
-  the new token back in the same Keychain item, so Claude Code stays logged in (refresh tokens
-  rotate; without the write-back Claude Code's own login would die). The secret is handed to
-  `security` on stdin, never on the command line. If the write-back fails you get a loud warning
-  and `claude /login` fixes it. If you would rather the tool never touch your login, don't run
-  `live` or the menu bar app; `scan`, `report`, `share` and `dashboard` never read it.
+  `/usage` uses). Nothing else is contacted.
+- **The Keychain is read, never written.** Only the per-config-dir item Claude Code itself uses
+  (`Claude Code-credentials-<hash>`) is read; the unsuffixed legacy item is ignored because it can
+  hold another account's login. An expired login is reported, never renewed: renewing rotates the
+  refresh token behind Claude Code's back, and versions before 0.1.18 that wrote it back truncated
+  the Keychain item (`security` caps a secret read from stdin at 128 bytes) and logged the account
+  out. Open a Claude Code window on that account and the meter comes back on its own. If you
+  would rather the tool never touch your login at all, don't run `live` or the menu bar app;
+  `scan`, `report`, `share` and `dashboard` never read it.
 - **What stays on this Mac.** `~/.claude-usage/` (the SQLite DB, `config.json`, `live.json`) is
   created `0700` and every file in it `0600`; no token is ever written there, printed, or logged.
 - **What `share` sends to the synced folder.** `<you>@<host>.json`: your chosen name, this Mac's
@@ -129,7 +128,7 @@ Read this before pointing it at your own login.
   Never paths, session titles, prompts, file names or content. The dashboard renders exactly that
   and nothing more.
 - **Your own account, at your own risk.** This uses your subscription login from outside Claude
-  Code. It only reads the usage endpoint and renews the token the same way Claude Code does, but
+  Code. It only reads the usage endpoint with the token Claude Code already holds, but
   Anthropic's terms for third-party use of subscription logins are theirs to change; run it on
   your own account only.
 - **Install folder.** The installer refuses to install outside your home folder or into a folder
