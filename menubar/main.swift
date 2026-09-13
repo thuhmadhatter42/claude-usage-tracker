@@ -132,8 +132,11 @@ final class Model: ObservableObject {
     var themeChoices: [(String, String)] { (themeFile?.order ?? ["system"]).compactMap { id in themeFile?.themes[id].map { (id, $0.name) } } }
 
     init() {
-        // The .app sits inside the install folder next to claude_usage.py.
-        scriptDir = Bundle.main.bundleURL.deletingLastPathComponent()
+        // The .app is built inside the install folder next to claude_usage.py; build.sh also stamps that
+        // folder into Info.plist so the app keeps working after someone drags it to /Applications.
+        let beside = Bundle.main.bundleURL.deletingLastPathComponent()
+        let stamped = (Bundle.main.object(forInfoDictionaryKey: "JusageScriptDir") as? String).map { URL(fileURLWithPath: $0) }
+        scriptDir = [beside, stamped].compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("claude_usage.py").path) } ?? beside
         themeFile = (try? Data(contentsOf: scriptDir.appendingPathComponent("themes.json"))).flatMap { try? JSONDecoder().decode(ThemeFile.self, from: $0) }
     }
     func start() { refresh(); timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.refresh() } }

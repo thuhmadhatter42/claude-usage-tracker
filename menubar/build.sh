@@ -4,6 +4,7 @@ set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEST="${1:-$HERE/..}"
 APP="$DEST/jusage.app"
+DEST_ABS="$(cd "$DEST" && pwd -P)"
 VER="$(cat "$HERE/../VERSION")"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cat > "$APP/Contents/Info.plist" <<EOF
@@ -18,6 +19,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundleShortVersionString</key><string>$VER</string>
   <key>CFBundleVersion</key><string>$VER</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>JusageScriptDir</key><string>$DEST_ABS</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

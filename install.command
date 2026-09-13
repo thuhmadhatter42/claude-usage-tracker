@@ -130,7 +130,7 @@ bold "Do you want to set up an alias?"
 echo "  This will add the \"jusage\" command to your shell."
 read -r -p "  Add it? [Y/n] " a
 if [[ ! "${a:-Y}" =~ ^[Nn] ]]; then
-  LINE="alias jusage=\"$DEST/jusage\""
+  LINE="alias jusage='\"$DEST/jusage\"'"   # inner quotes are kept in the alias text, so a space in the path survives expansion
   for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
     [ "$rc" = "$HOME/.bashrc" ] && [ ! -f "$rc" ] && continue
     touch "$rc"

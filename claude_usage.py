@@ -155,12 +155,17 @@ def config_dirs():
 
 @functools.lru_cache(maxsize=None)
 def acct_label(name):
-    """'.claude' -> 'Sam #1', '.claude-work' -> 'Sam #2' (your name from config, order = sorted dir names)."""
-    names = [d.name for d in config_dirs()]
-    who = load_config().get("user") or os.environ.get("USER", "me")
-    if name in names:
-        return f"{who} #{names.index(name) + 1}"
-    return name
+    """'.claude' -> 'Sam #1', '.claude-work' -> 'Sam #2'. The number is assigned the first time a
+    config dir is seen and remembered in config.json, so adding a dir later never renumbers the others."""
+    cfg = load_config()
+    numbers = cfg.setdefault("accounts", {})
+    new = [d.name for d in config_dirs() if d.name not in numbers]
+    if new:
+        for n in sorted(new):
+            numbers[n] = max(numbers.values(), default=0) + 1
+        save_config(cfg)
+    who = cfg.get("user") or os.environ.get("USER", "me")
+    return f"{who} #{numbers[name]}" if name in numbers else name
 
 
 def forecast(c, account, meter_name, pct_now, resets_at):
@@ -351,8 +356,11 @@ def read_credentials(cdir):
     <config dir>/.credentials.json elsewhere. Read only, never written."""
     if sys.platform == "darwin":
         import subprocess
-        r = subprocess.run(["security", "find-generic-password", "-s", keychain_service(cdir), "-w"],
-                           capture_output=True, text=True)
+        try:
+            r = subprocess.run(["security", "find-generic-password", "-s", keychain_service(cdir), "-w"],
+                               capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            raise LoginError("the Keychain did not answer in 30 s; a permission dialog is probably waiting on screen (click Always Allow)") from None
         if r.returncode != 0:
             raise LoginError("no claude.ai login in the Keychain for this config dir; run `claude /login` there")
         raw = r.stdout.strip()
@@ -715,9 +723,16 @@ def cmd_dashboard(args):
     reps = []
     for p in sorted(rd.glob("*.json")):
         try:
-            reps.append(json.loads(p.read_text()))
+            r = json.loads(p.read_text())
         except (OSError, ValueError) as e:   # mid-sync or half-written file: skip it, say so
             print(f"skipping {p.name}: {e}", file=sys.stderr)
+            continue
+        missing = [k for k in ("user", "host", "days") if not isinstance(r, dict) or k not in r]
+        if missing or not isinstance(r["days"], dict):
+            print(f"skipping {p.name}: not a jusage report (missing {', '.join(missing) or 'day table'}; "
+                  f"written by jusage {r.get('tool_version', '?') if isinstance(r, dict) else '?'})", file=sys.stderr)
+            continue
+        reps.append(r)
     if not reps:
         sys.exit(f"no reports in {rd} — run `share` first")
     out = Path(args.out) if args.out else rd.parent / "dashboard.html"
