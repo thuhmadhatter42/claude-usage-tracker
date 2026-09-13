@@ -71,6 +71,17 @@ def reports_dir(args):
     return p
 
 
+def install_id():
+    """Four random hex chars made once per install and kept in config.json. Part of the shared
+    report's file name, so two people with the same name and the same Mac name never overwrite
+    each other's report (Apple's default host names collide constantly)."""
+    cfg = load_config()
+    if not cfg.get("install_id"):
+        import secrets
+        cfg["install_id"] = secrets.token_hex(2); save_config(cfg)
+    return cfg["install_id"]
+
+
 def whoami(args):
     cfg = load_config()
     user = getattr(args, "user", None) or cfg.get("user") or os.environ.get("USER", "unknown")
@@ -592,14 +603,14 @@ def other_people(cfg, today):
     rd = cfg.get("reports_dir")
     if not rd or not Path(rd).is_dir():
         return []
-    me = f"{cfg.get('user')}@{socket.gethostname().split('.')[0]}"
+    me = install_id()
     out = []
     for p in sorted(Path(rd).glob("*.json")):
         try:
             r = json.loads(p.read_text())
         except (OSError, ValueError):
             continue
-        if f"{r.get('user')}@{r.get('host')}" == me:
+        if r.get("install_id") == me:
             continue
         days = r.get("days", {})
         def span(n):
@@ -686,7 +697,7 @@ def build_summary(c, user, host, pricing, share_projects=False):
             blk[acct_label(acct)].append({"start": b["start"].isoformat(timespec="minutes"), "end": b["end"].isoformat(timespec="minutes"),
                                           "tokens": total_tokens(a), "calls": a["calls"], "cost": round(a["cost"], 2)})
     return {
-        "user": user, "host": host, "tool_version": VERSION,
+        "user": user, "host": host, "install_id": install_id(), "tool_version": VERSION,
         "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "accounts": sorted(acct_label(a_) for a_ in accounts),
         "live": live_view(c, load_live()),
@@ -708,11 +719,16 @@ def cmd_share(args):
     if getattr(args, "projects", None) is not None:
         cfg["share_projects"] = bool(args.projects); save_config(cfg)
     share_projects = bool(cfg.get("share_projects"))
-    out = reports_dir(args) / f"{user}@{host}.json"
+    rd = reports_dir(args)
+    out = rd / f"{user}@{host}-{install_id()}.json"
     # temp file + rename: a sync client or another Mac's dashboard never sees a half-written report
     tmp = out.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(build_summary(db(), user, host, load_pricing(), share_projects), indent=1) + "\n")
     os.replace(tmp, out)
+    old = rd / f"{user}@{host}.json"          # the pre-0.1.21 name of this same report
+    if old.exists():
+        old.unlink()
+        print(f"removed {old.name} (this report is now {out.name})")
     print(f"wrote {out}" + ("" if share_projects else "  (project names not shared; `share --projects` to include them)"))
 
 

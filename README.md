@@ -15,7 +15,7 @@ menu bar app. No daemon, no third-party packages, no server of its own.
 - `live` reads Claude's **own** 5-hour and 7-day meters (the same endpoint `/usage` inside Claude
   Code uses), for every account on the Mac, using the login already in your Keychain. Nothing is
   estimated: if the endpoint can't be reached the meter is simply absent.
-- `share` writes `<you>@<host>.json` into a folder you sync with the others (iCloud, Syncthing,
+- `share` writes `<you>@<host>-<id>.json` (`<id>` = four random characters made once per install, so two people with the same name and Mac name never overwrite each other) into a folder you sync with the others (iCloud, Syncthing,
   Dropbox, a shared drive). `dashboard` builds one HTML page from every JSON there. What that
   file contains is listed under **Security and privacy** below; project folder names are
   included only if you ask for them.
@@ -119,7 +119,7 @@ Read this before pointing it at your own login.
   `scan`, `report`, `share` and `dashboard` never read it.
 - **What stays on this Mac.** `~/.claude-usage/` (the SQLite DB, `config.json`, `live.json`) is
   created `0700` and every file in it `0600`; no token is ever written there, printed, or logged.
-- **What `share` sends to the synced folder.** `<you>@<host>.json`: your chosen name, this Mac's
+- **What `share` sends to the synced folder.** `<you>@<host>-<id>.json`: your chosen name, this Mac's
   short hostname, the tool version, your account labels (`<you> #1`, `#2`), 90 days of per-day
   totals (tokens, calls, cost at API list price) by model and by account, the last 50 five-hour
   windows per account with their local start and end times (that is a working-hours log; know
