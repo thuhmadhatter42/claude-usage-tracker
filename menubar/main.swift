@@ -301,7 +301,18 @@ struct MeterRow: View {
             if !ft.isEmpty { Text(ft).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
             let sp = splitText(meter.split, me: me)
             if !sp.isEmpty { Text(sp).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
-            let miss = missingText(meter.split)
+        }
+    }
+}
+
+/// One line naming the account above its meters, so each row can say just "5 hours" / "7 days".
+/// Whoever has not reported into this account yet is said once here, not under every meter.
+struct AccountHeader: View {
+    let acct: String; let meters: [Meter]; var th: Theme = Theme(id: "system", def: nil)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(acct).font(.callout.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+            let miss = missingText(meters.first(where: { $0.split?.missing?.isEmpty == false })?.split)
             if !miss.isEmpty { Text(miss).font(.caption).foregroundStyle(th.warn) }
         }
     }
@@ -461,8 +472,8 @@ struct ContentView: View {
                 if model.shown("person:" + me), model.shown("sec:meters") {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(lives, id: \.key) { acct, lv in
-                            let tag = f.live.count > 1 ? "\(acct) · " : ""
-                            ForEach(lv.meters) { MeterRow(meter: $0, tag: tag, th: th, forecast: model.shown("sec:forecast"), me: f.user) }
+                            AccountHeader(acct: acct, meters: lv.meters, th: th)
+                            ForEach(lv.meters) { MeterRow(meter: $0, tag: "", th: th, forecast: model.shown("sec:forecast"), me: f.user) }
                             if let e = lv.error {
                                 // meters present + error = the last good reading; say when it is from and why it stopped
                                 let when = lv.meters.isEmpty ? "" : "Stale since \((lv.fetched ?? "").dropFirst(11).prefix(5)): "
@@ -518,7 +529,8 @@ struct ContentView: View {
                             }
                             if model.shown("sec:meters") {
                                 ForEach(p.live.sorted { $0.key < $1.key }, id: \.key) { acct, lv in
-                                    ForEach(lv.meters) { MeterRow(meter: $0, tag: "\(acct) · ", th: th, forecast: model.shown("sec:forecast")) }
+                                    AccountHeader(acct: acct, meters: lv.meters, th: th)
+                                    ForEach(lv.meters) { MeterRow(meter: $0, tag: "", th: th, forecast: model.shown("sec:forecast")) }
                                 }
                             }
                         }
