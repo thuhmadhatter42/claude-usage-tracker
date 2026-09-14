@@ -8,7 +8,11 @@ import UserNotifications
 // MARK: - data
 
 struct Forecast: Decodable { let ready: Bool; let samples: Int?; let left_usd: Double?; let hours_to_wall: Double?; let wall_at: String?; let per_pct_usd: Double? }
-struct Meter: Decodable, Identifiable { var id: String { name }; let name: String; let pct: Double; let resets_at: String?; let forecast: Forecast? }
+/// Who spent what inside this meter's period. Every field optional: a feed from an older jusage
+/// carries no split at all, and must still decode.
+struct Part: Decodable, Identifiable { var id: String { user }; let user: String; let cost: Double?; let share: Double? }
+struct Split: Decodable { let period_start: String?; let parts: [Part]?; let missing: [String]? }
+struct Meter: Decodable, Identifiable { var id: String { name }; let name: String; let pct: Double; let resets_at: String?; let forecast: Forecast?; let split: Split? }
 
 func forecastText(_ f: Forecast?) -> String {
     guard let f, f.ready, let left = f.left_usd else { return "" }
@@ -18,6 +22,19 @@ func forecastText(_ f: Forecast?) -> String {
         s += " · wall \(df.string(from: t)) at this pace"
     }
     return s
+}
+/// "this period: Sam 71% · Lee 29%" — shares of api-equivalent spend inside the meter's period,
+/// never of the percentage itself. `me` reads first: this is my meter on my Mac.
+func splitText(_ s: Split?, me: String?) -> String {
+    guard let parts = s?.parts, !parts.isEmpty else { return "" }
+    let ordered = parts.sorted { a, b in
+        if let me, (a.user == me) != (b.user == me) { return a.user == me }
+        return (a.share ?? 0) > (b.share ?? 0)
+    }
+    return "this period: " + ordered.map { "\($0.user) \(Int(((($0.share ?? 0) * 100)).rounded()))%" }.joined(separator: " · ")
+}
+func missingText(_ s: Split?) -> String {
+    (s?.missing ?? []).map { "\($0): not reported yet (update jusage)" }.joined(separator: " · ")
 }
 extension ISO8601DateFormatter {
     static let minutes: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f }()
@@ -270,7 +287,7 @@ struct ChannelMeter: View {
 }
 
 struct MeterRow: View {
-    let meter: Meter; let tag: String; var th: Theme = Theme(id: "system", def: nil); var forecast = true
+    let meter: Meter; let tag: String; var th: Theme = Theme(id: "system", def: nil); var forecast = true; var me: String? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline) {
@@ -282,6 +299,10 @@ struct MeterRow: View {
             ChannelMeter(pct: meter.pct, th: th)
             let ft = forecast ? forecastText(meter.forecast) : ""
             if !ft.isEmpty { Text(ft).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+            let sp = splitText(meter.split, me: me)
+            if !sp.isEmpty { Text(sp).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+            let miss = missingText(meter.split)
+            if !miss.isEmpty { Text(miss).font(.caption).foregroundStyle(th.warn) }
         }
     }
 }
@@ -441,7 +462,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(lives, id: \.key) { acct, lv in
                             let tag = f.live.count > 1 ? "\(acct) · " : ""
-                            ForEach(lv.meters) { MeterRow(meter: $0, tag: tag, th: th, forecast: model.shown("sec:forecast")) }
+                            ForEach(lv.meters) { MeterRow(meter: $0, tag: tag, th: th, forecast: model.shown("sec:forecast"), me: f.user) }
                             if let e = lv.error {
                                 // meters present + error = the last good reading; say when it is from and why it stopped
                                 let when = lv.meters.isEmpty ? "" : "Stale since \((lv.fetched ?? "").dropFirst(11).prefix(5)): "

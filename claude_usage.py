@@ -456,14 +456,19 @@ def fetch_live(cdir):
         raise RuntimeError(str(e)) from None
 
 
+def when(iso):
+    """Any ISO string from any Mac -> an aware local datetime, or None. Reports arrive from other
+    time zones, so their times are compared as instants, never as text."""
+    try:
+        return dt.datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone()
+    except (ValueError, TypeError):
+        return None
+
+
 def iso_minutes(iso):
     """Any ISO-8601 the endpoint sends -> local time, to the second, one fixed shape for every consumer."""
-    if not iso:
-        return None
-    try:
-        return dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().isoformat(timespec="seconds")
-    except ValueError:
-        return None
+    t = when(iso)
+    return t.isoformat(timespec="seconds") if t else None
 
 
 def meters(data):
@@ -582,6 +587,7 @@ def live_view(c, store, with_forecast=True):
 
 def cmd_live(args):
     c = db()
+    reports = split_reports(c, load_config())
 
     def show(name, entry, note):
         head = f"\n{acct_label(name)} ({name})"
@@ -599,10 +605,98 @@ def cmd_live(args):
         for n, pct, reset in ms:
             bar = "█" * int(pct // 5) + "░" * (20 - int(pct // 5))
             print(f"  {n.replace('_', ' '):<26} {bar} {pct:5.1f}%   {until(reset)}")
+            line = split_text(meter_split(n, reset, acct_label(name), reports))
+            if line:
+                print(f"  {'':<26} {line}")
 
     store = refresh_live(c, force=args.force, log=show)
     if args.raw:
         print(json.dumps(store, indent=1))
+
+
+# ---------- who used the meter ----------
+def blocks_summary(c, pricing):
+    """{account label: last 50 five-hour windows} — the part of the shared report that says WHEN
+    spend happened. Its own function because the split needs it without building a whole report."""
+    blk = {}
+    for acct, bl in blocks_by_account(fetch(c, since_date("90d"))).items():
+        rows = []
+        for b in bl[-50:]:
+            a = zero()
+            for r in b["rows"]: add(a, r, pricing)
+            rows.append({"start": b["start"].isoformat(timespec="minutes"), "end": b["end"].isoformat(timespec="minutes"),
+                         "tokens": total_tokens(a), "calls": a["calls"], "cost": round(a["cost"], 2)})
+        blk[acct_label(acct)] = rows
+    return blk
+
+
+def meter_split(meter_name, resets_at, account_label, reports):
+    """Who spent what inside this meter's current period (resets_at back 5 h / 7 d, up to now).
+    Anthropic meters an ACCOUNT, not a person: two people on one plan get one number. The honest
+    apportionment is each person's api-equivalent spend inside that period, read from the 5-hour
+    windows everyone shares — a share of spend, never a share of the percentage, because nobody
+    outside Anthropic knows how the percentage is weighted.
+    -> {"period_start", "parts": [{user, cost, share}] desc, "missing": [user]} or None.
+    `missing` is whoever shares windows but none under this account label: a report written before
+    0.1.22 labels accounts '<them> #1', so it cannot match, and saying so beats counting them as zero."""
+    reset = when(resets_at)
+    if not reset:
+        return None
+    start = reset - (dt.timedelta(hours=BLOCK_HOURS) if meter_name == "five_hour" else dt.timedelta(days=7))
+    end = dt.datetime.now().astimezone()
+    parts, missing = [], []
+    for r in reports:
+        blk = r.get("blocks") if isinstance(r.get("blocks"), dict) else None
+        if not blk:
+            continue
+        user = r.get("user") or "someone"
+        if account_label not in blk:
+            missing.append(user)
+            continue
+        cost = 0.0
+        for b in blk[account_label]:
+            b0, b1 = when(b.get("start")), when(b.get("end"))
+            if not b0 or not b1 or b1 <= b0:
+                continue
+            # a window the period boundary cuts counts by the fraction inside it. The divisor is the
+            # window as far as it has actually run: an open window's cost is what it has spent so far,
+            # and dividing that by a full five hours would discount it a second time.
+            overlap = (min(end, b1) - max(start, b0)).total_seconds()
+            span = (min(end, b1) - b0).total_seconds()
+            if overlap > 0 and span > 0:
+                cost += (b.get("cost") or 0) * overlap / span
+        if cost > 0:
+            parts.append({"user": user, "cost": round(cost, 2)})
+    total = sum(p["cost"] for p in parts)
+    for p in parts:
+        p["share"] = round(p["cost"] / total, 4) if total else 0.0
+    parts.sort(key=lambda p: -p["cost"])
+    if not parts and not missing:
+        return None
+    return {"period_start": start.isoformat(timespec="minutes"), "parts": parts, "missing": sorted(set(missing))}
+
+
+def split_text(sp):
+    """One line of plain text for a split — the wording the CLI and the dashboard both use."""
+    if not sp:
+        return ""
+    bits = [f"{p['user']} {p['share'] * 100:.0f}% (${p['cost']:,.0f})" for p in sp.get("parts") or []]
+    out = ["this period: " + " · ".join(bits)] if bits else []
+    out += [f"{u}: not reported yet (update jusage)" for u in sp.get("missing") or []]
+    return " · ".join(out)
+
+
+def split_reports(c, cfg, reports=None):
+    """What meter_split reads: my own windows straight from the db — the report I shared can be
+    twenty minutes old — then everyone else's. [] when no folder is shared with anyone."""
+    rd = cfg.get("reports_dir")
+    if not rd or not Path(os.path.expanduser(rd)).is_dir():
+        return []
+    if reports is None:
+        reports = load_reports(os.path.expanduser(rd))
+    me = install_id()
+    return ([{"user": cfg.get("user") or report_id(cfg)[0], "blocks": blocks_summary(c, load_pricing())}]
+            + [r for r in reports if r.get("install_id") != me])
 
 
 # ---------- menu bar feed ----------
@@ -644,13 +738,13 @@ def cmd_menu(args):
                        "projects": sorted(({"project": p_, "tokens": total_tokens(x), "cost": round(x["cost"], 2)} for p_, x in pp.items()), key=lambda d: -d["tokens"])[:8]})
         first = (first - dt.timedelta(days=1)).replace(day=1)
     cfg = load_config()
+    rd = Path(os.path.expanduser(cfg["reports_dir"])) if cfg.get("reports_dir") else None
     # The app polls this every 300 s, so refreshing the shared report and the dashboard here is what
     # keeps both within SHARE_EVERY_MIN of live for everyone who runs the app (`update` is for cron).
     # It must never cost the menu bar its numbers, so the failure is reported in the feed, not raised.
     share_error, shared_at = None, None
-    if cfg.get("reports_dir"):
+    if rd:
         try:
-            rd = Path(os.path.expanduser(cfg["reports_dir"]))
             mine = rd / report_id(cfg)[2]
             fresh = mine.exists() and (dt.datetime.now().timestamp() - mine.stat().st_mtime) / 60 <= SHARE_EVERY_MIN
             if not fresh:
@@ -659,6 +753,12 @@ def cmd_menu(args):
             shared_at = dt.datetime.fromtimestamp(mine.stat().st_mtime).astimezone().isoformat(timespec="seconds")
         except Exception as e:
             share_error = f"{type(e).__name__}: {e}"
+    # the shared folder is read once here and handed to both consumers of it
+    reports = load_reports(rd) if rd and rd.is_dir() else []
+    splittable = split_reports(c, cfg, reports)
+    for label, lv in live.items():
+        for m in lv["meters"]:
+            m["split"] = meter_split(m["name"], m["resets_at"], label, splittable)
     out = {"version": VERSION, "user": cfg.get("user"), "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
            "share_error": share_error, "shared_at": shared_at,
            "today": {"tokens": total_tokens(day), "cost": round(day["cost"], 2), "calls": day["calls"]},
@@ -668,19 +768,17 @@ def cmd_menu(args):
            "models": sorted(({"model": m, "tokens": total_tokens(x), "cost": round(x["cost"], 2)} for m, x in models.items()), key=lambda d: -d["tokens"]),
            "projects": sorted(({"project": p_, "tokens": total_tokens(x), "cost": round(x["cost"], 2)} for p_, x in projs.items()), key=lambda d: -d["tokens"])[:8],
            "dashboard": str(Path(cfg["reports_dir"]).parent / "dashboard.html") if cfg.get("reports_dir") else None,
-           "people": other_people(cfg, today)}
+           "people": other_people(reports, today)}
     print(json.dumps(out))
 
 
-def other_people(cfg, today):
-    """Everyone else's shared report, condensed for the menu bar: today / 7d / 30d totals + their meters."""
-    rd = cfg.get("reports_dir")
-    if not rd or not Path(rd).is_dir():
-        return []
+def other_people(reports, today):
+    """Everyone else's shared report, condensed for the menu bar: today / 7d / 30d totals + their meters.
+    Takes the already-loaded reports: the shared folder is read once per run, by the caller."""
     me = install_id()
     now = dt.datetime.now().astimezone()
     out = []
-    for r in load_reports(rd):
+    for r in reports:
         if r.get("install_id") == me:
             continue
         days = r.get("days", {})
@@ -765,14 +863,6 @@ def build_summary(c, user, host, pricing, share_projects=False):
         add(accts[r["day"]][r["account"]], r, pricing)
         add(projs[r["day"]][r["project"]], r, pricing)
         accounts.add(r["account"])
-    blk = {}
-    for acct, bl in blocks_by_account(rows).items():
-        blk[acct_label(acct)] = []
-        for b in bl[-50:]:
-            a = zero()
-            for r in b["rows"]: add(a, r, pricing)
-            blk[acct_label(acct)].append({"start": b["start"].isoformat(timespec="minutes"), "end": b["end"].isoformat(timespec="minutes"),
-                                          "tokens": total_tokens(a), "calls": a["calls"], "cost": round(a["cost"], 2)})
     return {
         "user": user, "host": host, "install_id": install_id(), "tool_version": VERSION,
         "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -788,7 +878,7 @@ def build_summary(c, user, host, pricing, share_projects=False):
                                    for p_, x in sorted(projs[d].items(), key=lambda kv: -total_tokens(kv[1]))[:10]}
                                   if share_projects else {})}
                  for d, a in sorted(days.items())},
-        "blocks": blk,
+        "blocks": blocks_summary(c, pricing),
     }
 
 

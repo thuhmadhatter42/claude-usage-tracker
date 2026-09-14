@@ -102,6 +102,18 @@ anything. If that write fails (the synced folder is offline, say) the menu bar k
 shows the reason as one amber line. `jusage update` is still there for a cron / launchd job on a Mac
 that does not run the app.
 
+## Who used it
+
+Claude's 5-hour and 7-day meters belong to an **account**, not to a person: two people on one plan
+see one percentage and no clue whose it is. So under each meter jusage shows the split — `this
+period: Sam 71% ($412) · Lee 29% ($168)`. It is each person's api-equivalent spend inside that
+meter's own period (its reset time, back five hours or seven days), added up from the 5-hour windows
+everybody's shared report already carries; a window the period boundary cuts counts by the fraction
+inside it. It is deliberately a share of *spend*, never of the percentage: how Anthropic weights the
+percentage is nobody's to guess. Someone whose jusage predates 0.1.22 labels their accounts
+`<them> #1` instead of by account email, so nothing of theirs can line up — they show as
+`not reported yet (update jusage)` rather than being silently counted as zero.
+
 ## Themes and what's on screen
 
 `themes.json` holds the themes (System, Paper, Graphite, Console, Midnight, Sand, Mono) for both the

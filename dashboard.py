@@ -1,8 +1,11 @@
 """dashboard.py — render the shared usage page from the shared reports JSONs.
-Pure stdlib. Called by claude_usage.py; nothing here touches the database."""
+Pure stdlib. Called by claude_usage.py; nothing here touches the database.
+The time and split helpers come from claude_usage so the page and the app word them identically."""
 import datetime as dt, html, json
 from collections import defaultdict
 from pathlib import Path
+
+from claude_usage import meter_split, split_text, when
 
 THEMES = json.loads((Path(__file__).with_name("themes.json")).read_text())
 
@@ -92,15 +95,6 @@ def short_model(m):
 RESET_DUE = "reset due, waiting for a fresh reading"
 
 
-def when(iso):
-    """Any ISO string from any report -> an aware local datetime, or None. Reports come from other
-    Macs in other time zones, so they are compared as instants, never as text."""
-    try:
-        return dt.datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone()
-    except (ValueError, TypeError):
-        return None
-
-
 def until(iso):
     """Server-side countdown: the no-JS fallback and the initial render. The browser rewrites it
     from its own clock every minute (see the tick script), because this page is read hours after it is built."""
@@ -170,7 +164,7 @@ def forecast_text(fc):
     return s
 
 
-def meter_html(name, pct, reset, tag="", err=None, fc=None, key=None):
+def meter_html(name, pct, reset, tag="", err=None, fc=None, key=None, sp=None):
     pct = max(0.0, min(100.0, float(pct or 0)))
     lit = round(pct / 100 * SEGS)
     segs = []
@@ -186,6 +180,9 @@ def meter_html(name, pct, reset, tag="", err=None, fc=None, key=None):
     ft = forecast_text(fc)
     if ft:
         right += f"<br>{html.escape(ft)}"
+    st = split_text(sp)
+    if st:
+        right += f"<br>{html.escape(st)}"
     shown = "—" if err else f"{pct:.0f}%"
     dk = f" data-k='acct:{html.escape(key)}'" if key else ""
     dr = f" data-reset='{html.escape(str(reset))}'" if reset and not err else ""
@@ -213,6 +210,7 @@ def plan_meters(people):
             rank = (not lv.get("stale"), at or dt.datetime.min.replace(tzinfo=dt.timezone.utc))
             if g["best"] is None or rank > g["best"][0]:
                 g["best"] = (rank, u, lv, at)
+    reports = [r for _, _, r in people]
     blocks = []
     for g in sorted(groups.values(), key=lambda g: g["label"].lower()):
         _, u, lv, at = g["best"]
@@ -225,7 +223,11 @@ def plan_meters(people):
             bits.append("shared by " + ", ".join(who))
         if g["legacy"]:
             bits.append("update jusage to match accounts across Macs")
-        rows = "".join(meter_html(m["name"], m["pct"], m.get("resets_at"), fc=m.get("forecast")) for m in lv["meters"])
+        # the split reads everyone's windows under this account's label; a legacy group is labelled
+        # by whoever reported it, not by the account, so nothing there can line up — no split line.
+        rows = "".join(meter_html(m["name"], m["pct"], m.get("resets_at"), fc=m.get("forecast"),
+                                  sp=None if g["legacy"] else meter_split(m["name"], m.get("resets_at"), g["label"], reports))
+                       for m in lv["meters"])
         blocks.append(f"<div class=acct data-k='acct:{html.escape(g['label'])}'><div class=h><b>{html.escape(g['label'])}</b>"
                       f"<span>{html.escape(' · '.join(bits))}</span></div><div class=meters>{rows}</div></div>")
     return blocks, [g["label"] for g in sorted(groups.values(), key=lambda g: g["label"].lower())]
