@@ -598,9 +598,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         effect.material = .popover; effect.state = .active; effect.blendingMode = .behindWindow
         effect.wantsLayer = true; effect.layer?.cornerRadius = 12; effect.layer?.masksToBounds = true
         host.translatesAutoresizingMaskIntoConstraints = false
-        effect.addSubview(host)
-        NSLayoutConstraint.activate([host.leadingAnchor.constraint(equalTo: effect.leadingAnchor), host.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
-                                     host.topAnchor.constraint(equalTo: effect.topAnchor), host.bottomAnchor.constraint(equalTo: effect.bottomAnchor)])
+        // Content scrolls vertically when it's taller than place() can fit on screen
+        // (see place()); host keeps its full natural height so fittingSize still
+        // reports true content size for the small (non-scrolling) case.
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = host
+        effect.addSubview(scroll)
+        NSLayoutConstraint.activate([scroll.leadingAnchor.constraint(equalTo: effect.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
+                                     scroll.topAnchor.constraint(equalTo: effect.topAnchor), scroll.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
+                                     host.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor), host.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+                                     host.topAnchor.constraint(equalTo: scroll.contentView.topAnchor)])
         panel = Panel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.contentView = effect
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
@@ -643,13 +655,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let size = host.fittingSize
         guard let b = item.button, let bw = b.window else { return }
         let anchor = bw.convertToScreen(b.convert(b.bounds, to: nil))
+        // bw.screen (not NSScreen.main) is the display the status item actually lives on,
+        // so this already does the right thing when the menu bar is on a second display.
         let screen = bw.screen ?? NSScreen.main
         let vis = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let margin: CGFloat = 8
+        // Never taller than the screen's visible area (below the menu bar / notch,
+        // above the dock); host.fittingSize above is still the true, unclipped content
+        // height for the small case — the NSScrollView added around host in
+        // applicationDidFinishLaunching makes the excess scroll instead of clipping off-screen.
+        let maxHeight = vis.height - margin * 2
+        let height = min(size.height, maxHeight)
         var x = anchor.midX - size.width / 2
-        x = min(max(x, vis.minX + 8), vis.maxX - size.width - 8)
-        var y = anchor.minY - 6 - size.height
-        y = max(y, vis.minY + 8)
-        panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
+        x = min(max(x, vis.minX + margin), vis.maxX - size.width - margin)
+        var y: CGFloat
+        if size.height > maxHeight {
+            // Content doesn't fit on screen: pin the top just under the menu bar
+            // and let the scroll view carry the rest, instead of pinning the
+            // bottom and letting the top run off the top of the screen.
+            y = vis.minY + margin
+        } else {
+            y = anchor.minY - 6 - size.height
+            y = max(y, vis.minY + margin)
+        }
+        panel.setFrame(NSRect(x: x, y: y, width: size.width, height: height), display: true)
     }
 
     func showPanel() {
