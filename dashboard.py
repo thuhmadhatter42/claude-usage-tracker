@@ -38,7 +38,12 @@ h1{font-size:20px;font-weight:600;letter-spacing:-.01em;margin:0}
 h2{font-size:13px;font-weight:600;color:var(--ink2);margin:30px 0 8px}
 .panel{background:var(--sf);border:1px solid var(--line);border-radius:12px}
 .today{padding:16px 20px 14px;margin-bottom:12px}
-.who{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}.who b{font-weight:600}.who span{color:var(--mut);font-size:12.5px}
+.who{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}.who b{font-weight:600}.who span{color:var(--mut);font-size:12.5px}
+.stale{color:var(--warn);font-size:12px;border:1px solid var(--warn);border-radius:6px;padding:1px 7px}
+.sub{color:var(--ink2);font-size:12.5px;margin:-4px 0 12px}
+.acct{margin-top:14px}.acct:first-of-type{margin-top:0}
+.acct .h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.acct .h b{font-weight:600;font-size:13.5px}.acct .h span{color:var(--mut);font-size:12px}
+.acct .meters{margin-top:6px;padding-top:0;border-top:0}
 .stats{display:flex;flex-wrap:wrap;gap:6px 34px;align-items:flex-end}
 .stat{display:flex;flex-direction:column;gap:1px;min-width:88px}
 .stat .v{font-size:26px;font-weight:600;line-height:1.1;letter-spacing:-.02em}.stat .v small{font-size:13px;font-weight:500;color:var(--ink2);margin-left:5px;letter-spacing:0}
@@ -84,17 +89,29 @@ def short_model(m):
     return m.replace("claude-", "").replace("-20251001", "")
 
 
-def until(iso):
-    if not iso:
-        return ""
+RESET_DUE = "reset due, waiting for a fresh reading"
+
+
+def when(iso):
+    """Any ISO string from any report -> an aware local datetime, or None. Reports come from other
+    Macs in other time zones, so they are compared as instants, never as text."""
     try:
-        t = dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
-    except ValueError:
+        return dt.datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone()
+    except (ValueError, TypeError):
+        return None
+
+
+def until(iso):
+    """Server-side countdown: the no-JS fallback and the initial render. The browser rewrites it
+    from its own clock every minute (see the tick script), because this page is read hours after it is built."""
+    t = when(iso)
+    if not t:
         return ""
-    left = t - dt.datetime.now().astimezone()
-    h, m = divmod(max(int(left.total_seconds()) // 60, 0), 60)
-    when = f"{t:%H:%M}" if t.date() == dt.date.today() else f"{t:%a %H:%M}"
-    return f"resets {when}, in {h}h {m:02d}m"
+    left = (t - dt.datetime.now().astimezone()).total_seconds()
+    if left <= 0:
+        return RESET_DUE
+    h, m = divmod(int(left) // 60, 60)
+    return f"resets {t:%H:%M}, in {h}h {m:02d}m" if t.date() == dt.date.today() else f"resets {t:%a %H:%M}, in {h}h {m:02d}m"
 
 
 def day_tot(a):
@@ -164,14 +181,54 @@ def meter_html(name, pct, reset, tag="", err=None, fc=None, key=None):
             cls += " h" if frac > 0.9 else " w" if frac > 0.7 else ""
         segs.append(f"<i class='{cls}'></i>")
     label = METER_NAMES.get(name, name.replace("_", " "))
-    right = html.escape(err) if err else until(reset)
+    # the countdown is the one thing the browser rewrites, so it gets its own span and the raw time
+    right = html.escape(err) if err else f"<span class=rt>{html.escape(until(reset))}</span>"
     ft = forecast_text(fc)
     if ft:
         right += f"<br>{html.escape(ft)}"
     shown = "—" if err else f"{pct:.0f}%"
     dk = f" data-k='acct:{html.escape(key)}'" if key else ""
-    return (f"<div class='meter{' err' if err else ''}'{dk}><div class=n><b>{shown}</b>{html.escape(tag + label)}</div>"
+    dr = f" data-reset='{html.escape(str(reset))}'" if reset and not err else ""
+    return (f"<div class='meter{' err' if err else ''}'{dk}{dr}><div class=n><b>{shown}</b>{html.escape(tag + label)}</div>"
             f"<div class=bar>{''.join(segs)}</div><div class=r>{right}</div></div>")
+
+
+def plan_meters(people):
+    """Meters belong to a claude.ai ACCOUNT, not to a person or a Mac: two people on one plan are
+    logged into the same accounts, and each Mac takes its own reading. So group by the account uuid
+    the report carries and show the freshest reading once. Reports from before 0.1.22 carry no uuid;
+    they fall back to their own label and say to upgrade, rather than silently double-counting."""
+    groups = {}
+    for u, _, r in people:
+        for label, lv in (r.get("live") or {}).items():
+            if not lv.get("meters"):
+                continue
+            acct = (lv.get("account") or {}) if isinstance(lv.get("account"), dict) else {}
+            key = acct.get("id") or f"label:{label}"
+            g = groups.setdefault(key, {"label": acct.get("email") or label, "legacy": not acct.get("id"),
+                                        "people": [], "best": None})
+            g["people"].append(u)
+            at = when(lv.get("fetched"))
+            # a usable reading beats a stale one; between equals the newest instant wins
+            rank = (not lv.get("stale"), at or dt.datetime.min.replace(tzinfo=dt.timezone.utc))
+            if g["best"] is None or rank > g["best"][0]:
+                g["best"] = (rank, u, lv, at)
+    blocks = []
+    for g in sorted(groups.values(), key=lambda g: g["label"].lower()):
+        _, u, lv, at = g["best"]
+        bits = [(f"read on {u}'s Mac at {at:%H:%M}" if at.date() == dt.date.today() else f"read on {u}'s Mac {at:%a %H:%M}")
+                if at else "reading of unknown age"]
+        if lv.get("stale"):
+            bits.append("stale — that Mac could not refresh it")
+        who = sorted(set(g["people"]))
+        if len(who) > 1:
+            bits.append("shared by " + ", ".join(who))
+        if g["legacy"]:
+            bits.append("update jusage to match accounts across Macs")
+        rows = "".join(meter_html(m["name"], m["pct"], m.get("resets_at"), fc=m.get("forecast")) for m in lv["meters"])
+        blocks.append(f"<div class=acct data-k='acct:{html.escape(g['label'])}'><div class=h><b>{html.escape(g['label'])}</b>"
+                      f"<span>{html.escape(' · '.join(bits))}</span></div><div class=meters>{rows}</div></div>")
+    return blocks, [g["label"] for g in sorted(groups.values(), key=lambda g: g["label"].lower())]
 
 
 def render(reps, version):
@@ -250,29 +307,34 @@ def render(reps, version):
                 stats.append(f"<div class='stat sm' data-k='acct:{html.escape(acct)}'><div class=v>{fmt_n(x['tokens'])}</div><div class=l>{html.escape(acct)}</div></div>")
         strip = (f"<div class=stat><div class=v>{fmt_n(t7)}</div><div class=l>7 days · ${c7:,.0f}</div></div>"
                  f"<div class=stat><div class=v>{fmt_n(t30)}</div><div class=l>30 days · ${c30:,.0f}</div></div>")
+        # meters moved to the Plan meters section (one account, one row); the card keeps what is
+        # genuinely this person's: their usage, and which accounts they are logged into.
         live = r.get("live") or {}
-        meters = []
-        for acct, lv in live.items():
-            tag = f"{acct} · " if len(live) > 1 else ""
-            if lv.get("error") and not lv.get("meters"):
-                meters.append(meter_html("meters", 0, None, tag, err="not reachable, run jusage live", key=acct))
-                continue
-            for m in lv.get("meters", []):
-                meters.append(meter_html(m["name"], m["pct"], m.get("resets_at"), tag, fc=m.get("forecast"), key=acct))
-        fetched = next((html.escape(str(lv["fetched"])[11:16]) for lv in live.values() if lv.get("fetched") and lv.get("meters")), None)
-        if fetched and any(lv.get("stale") for lv in live.values()):
-            fetched += " (stale)"
-        meters_html = (f"<div class=meters>{''.join(meters)}</div>" if meters else
-                       f"<div class=meters>{meter_html('meters', 0, None, err='run jusage live once to light these up')}</div>")
+        logged = r.get("accounts") or sorted(live)
+        sub = "logged into: " + (", ".join(logged) if logged else "no account seen yet")
+        if live and all(lv.get("stale") for lv in live.values()):
+            sub += " · their meters are stale"
+        gen = when(r.get("generated"))
+        age_h = (dt.datetime.now().astimezone() - gen).total_seconds() / 3600 if gen else None
+        genlabel = "" if not gen else (f" · report {gen:%H:%M}" if gen.date() == today else f" · report {gen:%-d %b %H:%M}")
+        stale_tag = (f"<span class=stale>report from {gen:%-d %b %H:%M}, may be stale</span>"
+                     if age_h is not None and age_h > 6 else "")
         strips.append(f"<section class='panel today' data-k='person:{html.escape(u)}' style='border-top:3px solid var(--s{i})'>"
-                      f"<div class=who><b>{html.escape(label)}</b><span>{today:%A %-d %B}{' · meters as of ' + fetched if fetched else ''}</span></div>"
-                      f"<div class=stats>{''.join(stats)}</div><div class=strip>{strip}</div>{meters_html}</section>")
+                      f"<div class=who><b>{html.escape(label)}</b><span>{today:%A %-d %B}{genlabel}</span>{stale_tag}</div>"
+                      f"<div class=sub>{html.escape(sub)}</div>"
+                      f"<div class=stats>{''.join(stats)}</div><div class=strip>{strip}</div></section>")
     if multi:
         tot30 = sum(window(r, 30)[0] for _, _, r in people) or 1
         strips.append("<section class='panel today' data-k='sec:everyone'><div class=who><b>everyone</b><span>30 days</span></div><div class=stats>"
                       + f"<div class=stat><div class=v>{fmt_n(tot30)}</div><div class=l>tokens, all of us</div></div>"
                       + "".join(f"<div class='stat sm'><div class=v>{window(r,30)[0]/tot30*100:.0f}%</div><div class=l>{html.escape(u)}</div></div>" for u, _, r in people)
                       + "</div></section>")
+
+    # ---- plan meters: one account, one row, the freshest reading anyone has ----
+    pm, plan_labels = plan_meters(people)
+    plan_body = "".join(pm) if pm else f"<div class=meters>{meter_html('meters', 0, None, err='run jusage live once to light these up')}</div>"
+    plan_html = (f"<section class='panel today' data-k='sec:plan'><div class=who><b>Plan meters</b>"
+                 f"<span>Claude's own limits, one row per account</span></div>{plan_body}</section>")
 
     # ---- charts ----
     days7 = [(today - dt.timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
@@ -329,7 +391,8 @@ def render(reps, version):
         tables.append(f"<div class=month><h3>{mdate:%B %Y}</h3><div class=wrap><table><tr><th>day</th>{pcols}<th>input</th><th>cache write</th><th>cache read</th><th>output</th><th>total</th><th>$ api-equiv</th></tr>{''.join(rows)}</table></div></div>")
 
     # ---- customize panel ----
-    accts = sorted({a for _, _, r in people for a in r.get("accounts", [])})
+    # every label that carries a data-k='acct:…' anywhere on the page, so each one has a checkbox
+    accts = sorted({a for _, _, r in people for a in r.get("accounts", [])} | set(plan_labels))
     def boxes(kind, items):
         return "".join(f"<label><input type=checkbox value='{kind}:{html.escape(k)}' checked>{html.escape(lab)}</label>" for k, lab in items)
     cfg = ["<div class=cfg-h><b>Customize</b><button class=gear id=cfg-x>Done</button></div>",
@@ -337,7 +400,7 @@ def render(reps, version):
            "<h4>People</h4>" + boxes("person", [(u, u) for u, _, _ in people]) + (boxes("sec", [("everyone", "everyone, 30 days")]) if multi else "")]
     if accts:
         cfg.append("<h4>Accounts</h4>" + boxes("acct", [(a, a) for a in accts]))
-    cfg.append("<h4>Sections</h4>" + boxes("sec", [("charts", "tokens per day"), ("models", "models, last 30 days"), ("days", "every day"), ("note", "footnote")]))
+    cfg.append("<h4>Sections</h4>" + boxes("sec", [("plan", "plan meters"), ("charts", "tokens per day"), ("models", "models, last 30 days"), ("days", "every day"), ("note", "footnote")]))
     cfg.append("<h4>Charts</h4>" + boxes("chart", [(cid, title) for title, _, _, _, cid in charts]))
     cfg.append("<p class=small>Saved in this browser only. Everyone sees the same page; each of us picks a view.</p>")
     cfg_html = f"<aside class=cfg id=cfg hidden>{''.join(cfg)}</aside>"
@@ -360,11 +423,22 @@ const rows=data.series.map(([k,l],i)=>{tot+=v[k]||0;return [k,l,i]}).filter(([k]
 const dd=new Date(d+'T12:00');tip.innerHTML=`<b>${dd.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})} · ${F(tot)}</b>${rows||'<span style="color:var(--mut)">nothing</span>'}`;tip.style.display='block';
 const r=ch.getBoundingClientRect();let x=e.clientX-r.left+14,y=e.clientY-r.top+14;if(x+tip.offsetWidth>r.width-8)x-=tip.offsetWidth+28;tip.style.left=x+'px';tip.style.top=y+'px';});
 g.addEventListener('mouseleave',()=>tip.style.display='none');});});
-""" % json.dumps(tipdata).replace("<", "\\u003c")   # a project folder named "</script>…" must not break out of the script tag
+// countdowns run on the reader's clock: this page is opened hours, sometimes days, after it was built
+const P2=n=>String(n).padStart(2,'0');
+function tick(){const now=Date.now();document.querySelectorAll('.meter[data-reset]').forEach(m=>{
+const el=m.querySelector('.rt');if(!el)return;const t=new Date(m.dataset.reset);if(isNaN(+t))return;
+const left=Math.floor((t-now)/60000);
+if(left<=0){el.textContent='%s';return}
+const today=new Date().toDateString()===t.toDateString();
+const at=(today?'':t.toLocaleDateString(undefined,{weekday:'short'})+' ')+P2(t.getHours())+':'+P2(t.getMinutes());
+el.textContent='resets '+at+', in '+Math.floor(left/60)+'h '+P2(left%%60)+'m';});}
+tick();setInterval(tick,60000);
+""" % (json.dumps(tipdata).replace("<", "\\u003c"), RESET_DUE)   # a project folder named "</script>…" must not break out of the script tag
 
     return f"""<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>jusage</title><style>{CSS.replace("@LIGHT@", light).replace("@DARK@", dark)}{''.join(theme_css)}</style></head><body><main>
-<div class=head><h1>Claude usage</h1><span>shared · jusage {version}</span><button class=gear id=gear>Customize</button></div>
+<div class=head><h1>Claude usage</h1><span>shared · jusage {version} · built {dt.datetime.now():%a %H:%M}</span><button class=gear id=gear>Customize</button></div>
+{plan_html}
 {''.join(strips)}
 <div data-k='sec:charts'><h2>Tokens per day</h2><div class=charts>{''.join(chart_html)}</div></div>
 <div data-k='sec:models'><h2>Models, last 30 days</h2>{model_table}</div>

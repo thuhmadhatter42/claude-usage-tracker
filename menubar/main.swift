@@ -34,14 +34,16 @@ struct Month: Decodable, Identifiable {
 }
 struct Person: Decodable, Identifiable {
     var id: String { "\(user)@\(host)" }
-    let user: String; let host: String; let updated: String?
+    let user: String; let host: String; let updated: String?; let age_hours: Double?
     let today: Tokens; let week: Tokens; let month: Tokens; let live: [String: Live]
+    let account_ids: [String: String]?
 }
 struct Feed: Decodable {
     let version: String; let user: String?; let generated: String
     let today: Tokens; let week: Tokens; let windows: [Window]?
     let live: [String: Live]; let accounts: [String: Tokens]; let models: [ModelRow]; let dashboard: String?
     let months: [Month]?; let people: [Person]?; let projects: [ProjectRow]?
+    let share_error: String?; let shared_at: String?
 }
 
 // MARK: - themes (themes.json next to claude_usage.py; shared with the dashboard)
@@ -90,11 +92,21 @@ func meterLabel(_ n: String) -> String {
     ["five_hour": "5 hours", "seven_day": "7 days", "seven_day_opus": "7 days, Opus",
      "seven_day_sonnet": "7 days, Sonnet", "seven_day_fable": "7 days, Fable"][n] ?? n.replacingOccurrences(of: "_", with: " ")
 }
+/// Never "0h 00m": once the reset time is behind us the percentage on screen belongs to the
+/// finished period, and saying so is the only honest thing until the next reading lands.
 func resetsText(_ iso: String?) -> String {
     guard let iso, let t = ISO8601DateFormatter.minutes.date(from: iso) else { return "" }
-    let left = max(Int(t.timeIntervalSinceNow) / 60, 0)
+    let secs = t.timeIntervalSinceNow
+    if secs <= 0 { return "reset due, waiting for a fresh reading" }
+    let left = Int(secs) / 60
     let f = DateFormatter(); f.dateFormat = Calendar.current.isDateInToday(t) ? "HH:mm" : "EEE HH:mm"
     return "resets \(f.string(from: t)), in \(left / 60)h \(String(format: "%02d", left % 60))m"
+}
+/// "as of 17:06", or "as of Sat 17:06" when the other person's report is not from today.
+func asOfText(_ iso: String?) -> String {
+    guard let iso, let t = ISO8601DateFormatter.minutes.date(from: iso) else { return "" }
+    let f = DateFormatter(); f.dateFormat = Calendar.current.isDateInToday(t) ? "HH:mm" : "EEE HH:mm"
+    return "as of \(f.string(from: t))"
 }
 
 // MARK: - model
@@ -413,6 +425,15 @@ struct ContentView: View {
             } else if let f = model.feed {
                 let th = model.theme
                 let me = f.user ?? "me"
+                // A refresh that failed after a feed exists keeps the numbers on screen: they are the
+                // last good ones and still worth reading. The reason goes above them until one succeeds.
+                if let e = model.error {
+                    Label(e, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(th.warn).lineLimit(3)
+                }
+                if let se = f.share_error {
+                    Label("shared report not updated: " + se, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(th.warn).lineLimit(3)
+                }
                 // meters
                 let lives = f.live.filter { model.shown("acct:" + $0.key) }.sorted { $0.key < $1.key }
                 let anyMeters = lives.contains { !$0.value.meters.isEmpty }
@@ -463,7 +484,11 @@ struct ContentView: View {
                                 Text(p.user).font(.callout.weight(.semibold))
                                 Text(p.host).font(.caption).foregroundStyle(.tertiary)
                                 Spacer()
-                                if let u = p.updated, u.count >= 16 { Text("as of \(u.dropFirst(11).prefix(5))").font(.caption).foregroundStyle(.tertiary) }
+                                let asOf = asOfText(p.updated)
+                                if !asOf.isEmpty { Text(asOf).font(.caption).foregroundStyle(.tertiary) }
+                                if let a = p.age_hours, a > 6 {
+                                    Text("report \(Int(a.rounded())) h old").font(.caption).foregroundStyle(th.warn)
+                                }
                             }
                             HStack(spacing: 22) {
                                 Stat(value: fmt(p.today.tokens), label: "today · \(money(p.today.cost))")

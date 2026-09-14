@@ -14,7 +14,14 @@ menu bar app. No daemon, no third-party packages, no server of its own.
   scale** for splitting a plan. Nobody on Max is billed that number.
 - `live` reads Claude's **own** 5-hour and 7-day meters (the same endpoint `/usage` inside Claude
   Code uses), for every account on the Mac, using the login already in your Keychain. Nothing is
-  estimated: if the endpoint can't be reached the meter is simply absent.
+  estimated: if the endpoint can't be reached the meter is simply absent. A reading whose reset
+  time has passed is refetched even inside the 15-minute cache, and until a fresh one lands the
+  countdown says "reset due" instead of flooring to `0h 00m`.
+- Each account is labelled by its **account email**, read out of Claude Code's own
+  `<config dir>/.claude.json` — nothing is fetched and no token is involved. Two people who split
+  a plan are logged into the same accounts, so the shared dashboard can show one meter per plan
+  account instead of the same account twice under two different names. A config dir with no login
+  yet falls back to `<you> #1`, `#2` as before.
 - `share` writes `<you>@<host>-<id>.json` (`<id>` = four random characters made once per install, so two people with the same name and Mac name never overwrite each other) into a folder you sync with the others (iCloud, Syncthing,
   Dropbox, a shared drive). `dashboard` builds one HTML page from every JSON there. What that
   file contains is listed under **Security and privacy** below; project folder names are
@@ -89,6 +96,12 @@ the busiest models and projects, plus everyone else who shares into the same rep
 5 minutes, ⌘R to force. The sliders icon (⌘,) opens Customize: theme, which people / accounts /
 sections to show, open at login. Launch with `jusage app`.
 
+While the app is running it also **rewrites your shared report and the dashboard** whenever they are
+more than 20 minutes old, so everybody's page stays current without anyone remembering to run
+anything. If that write fails (the synced folder is offline, say) the menu bar keeps its numbers and
+shows the reason as one amber line. `jusage update` is still there for a cron / launchd job on a Mac
+that does not run the app.
+
 ## Themes and what's on screen
 
 `themes.json` holds the themes (System, Paper, Graphite, Console, Midnight, Sand, Mono) for both the
@@ -120,7 +133,9 @@ Read this before pointing it at your own login.
 - **What stays on this Mac.** `~/.claude-usage/` (the SQLite DB, `config.json`, `live.json`) is
   created `0700` and every file in it `0600`; no token is ever written there, printed, or logged.
 - **What `share` sends to the synced folder.** `<you>@<host>-<id>.json`: your chosen name, this Mac's
-  short hostname, the tool version, your account labels (`<you> #1`, `#2`), 90 days of per-day
+  short hostname, the tool version, your account labels — **the email address and account id of each
+  claude.ai account you are logged into**, which is what lets the dashboard show one meter per plan
+  account rather than the same account twice (a config dir with no login stays `<you> #1`) — 90 days of per-day
   totals (tokens, calls, cost at API list price) by model and by account, the last 50 five-hour
   windows per account with their local start and end times (that is a working-hours log; know
   that before sharing with people who should not have it), and Claude's current meters with their
@@ -136,6 +151,15 @@ Read this before pointing it at your own login.
   every five minutes.
 
 Found something? Open an issue, or for anything sensitive email the address on the GitHub profile.
+
+## Upgrading to 0.1.22
+
+Nothing to do. On the first run your account labels change from `<you> #1` / `#2` to the account
+email, the old-named report in the shared folder is removed automatically (its replacement is
+`<you>@<host>-<id>.json`), and the menu bar's "what to show in the bar" choice falls back to its
+default once because the label it remembered no longer exists. Pick it again if you had changed it.
+Anyone still on an older version keeps working: their accounts are shown under their old labels with
+a note to upgrade.
 
 ## Versioning
 

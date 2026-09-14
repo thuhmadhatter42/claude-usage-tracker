@@ -9,7 +9,7 @@ Commands
   scan        read every ~/.claude*/projects/**/*.jsonl into ~/.claude-usage/usage.db
   live        Claude's own 5-hour / 7-day meters, per account (reads your Keychain login)
   report      totals by day / model / account / project / 5-hour block
-  share       write <user>@<host>.json into the shared reports folder
+  share       write <user>@<host>-<id>.json into the shared reports folder
   dashboard   build one HTML page from every JSON in the reports folder
   update      scan + share + dashboard (the one to put on a schedule)
 """
@@ -165,9 +165,38 @@ def config_dirs():
 
 
 @functools.lru_cache(maxsize=None)
+def account_identity(cdir):
+    """Which claude.ai account a config dir is logged into, from the `oauthAccount` block Claude Code
+    itself writes into <config dir>/.claude.json. Nothing is fetched and no token is read. None when
+    the file or the block is missing — a meter is still a meter, it just falls back to '<you> #n'."""
+    # Claude Code writes ~/.claude.json for the default dir and <dir>/.claude.json when
+    # CLAUDE_CONFIG_DIR is set; a Mac can have both, so the most recently written one that names an account wins.
+    cands = [Path(cdir) / ".claude.json"] + ([HOME / ".claude.json"] if Path(cdir) == HOME / ".claude" else [])
+    found = []
+    for f in cands:
+        try:
+            o = (json.loads(f.read_text()).get("oauthAccount") or {})
+            if o.get("emailAddress") and o.get("accountUuid"):
+                found.append((f.stat().st_mtime, {"email": o["emailAddress"], "id": o["accountUuid"]}))
+        except (OSError, ValueError, AttributeError):
+            continue
+    return max(found)[1] if found else None
+
+
+def identity_for(name):
+    """The identity of the config dir called `name` on this Mac, or None."""
+    for d in config_dirs():
+        if d.name == name:
+            return account_identity(d)
+    return None
+
+
+@functools.lru_cache(maxsize=None)
 def acct_label(name):
-    """'.claude' -> 'Sam #1', '.claude-work' -> 'Sam #2'. The number is assigned the first time a
-    config dir is seen and remembered in config.json, so adding a dir later never renumbers the others."""
+    """The account's email when this Mac knows it, else '.claude' -> 'Sam #1', '.claude-work' -> 'Sam #2'.
+    The email is what makes two people's reports line up: the same plan account is one row on the
+    dashboard instead of '<me> #2' on one Mac and '<you> #1' on the other. The number is still assigned the first time a
+    config dir is seen and remembered in config.json, so the fallback never renumbers the others."""
     cfg = load_config()
     numbers = cfg.setdefault("accounts", {})
     new = [d.name for d in config_dirs() if d.name not in numbers]
@@ -175,6 +204,9 @@ def acct_label(name):
         for n in sorted(new):
             numbers[n] = max(numbers.values(), default=0) + 1
         save_config(cfg)
+    ident = identity_for(name)
+    if ident:
+        return ident["email"]
     who = cfg.get("user") or os.environ.get("USER", "me")
     return f"{who} #{numbers[name]}" if name in numbers else name
 
@@ -348,6 +380,7 @@ def blocks_by_account(rows):
 LIVE = STATE / "live.json"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 LIVE_TTL_MIN = 15   # ClaudeBar saw 1-hour 429s from polling this endpoint; 15 min is plenty fresh
+SHARE_EVERY_MIN = 20   # how old this Mac's shared report may get before menu-json rewrites it
 
 
 class LoginError(Exception):
@@ -457,12 +490,19 @@ def meters(data):
     return out
 
 
+RESET_DUE = "reset due, waiting for a fresh reading"
+
+
 def until(iso):
+    """A countdown that never floors to '0h 00m': once the reset time is behind us the number on
+    screen is last period's, and saying so is the only honest thing until the next fetch lands."""
     if not iso:
         return ""
     t = dt.datetime.fromisoformat(iso)
-    left = t - dt.datetime.now().astimezone()
-    h, m = divmod(max(int(left.total_seconds()) // 60, 0), 60)
+    left = (t - dt.datetime.now().astimezone()).total_seconds()
+    if left <= 0:
+        return RESET_DUE
+    h, m = divmod(int(left) // 60, 60)
     return f"resets in {h}h {m:02d}m ({t:%a %H:%M})"
 
 
@@ -483,16 +523,31 @@ def load_live():
     return store
 
 
+def reset_passed(data, now):
+    """True when any meter in a cached reply has already reset. Such a reading is not just old,
+    it is wrong (it shows the finished period), so it is refetched whatever the cache says."""
+    for _, _, r in meters(data):
+        try:
+            if r and dt.datetime.fromisoformat(r) <= now:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def refresh_live(c, force=False, log=print):
-    """Fetch every account's meters unless the cached reading is younger than LIVE_TTL_MIN.
+    """Fetch every account's meters unless the cached reading is younger than LIVE_TTL_MIN
+    (a reading whose reset time has passed is refetched anyway).
     Returns the store; log() gets one line per account (nothing when quiet)."""
     store = load_live()
     now = dt.datetime.now().astimezone()
     for cdir in config_dirs():
-        prev = store.get(cdir.name)
+        prev, note = store.get(cdir.name), ""
         if prev and prev["data"] and not prev["error"] and not force:
             age = (now - dt.datetime.fromisoformat(prev["fetched"])).total_seconds() / 60
-            if age < LIVE_TTL_MIN:
+            if reset_passed(prev["data"], now):
+                note = "reset passed, refetching"      # a new period behind the cache: the old % is a lie
+            elif age < LIVE_TTL_MIN:
                 log(cdir.name, prev, f"cached {age:.0f} min ago, --force to refetch")
                 continue
         try:
@@ -504,19 +559,22 @@ def refresh_live(c, force=False, log=print):
             c.executemany("INSERT OR IGNORE INTO meter_log VALUES (?,?,?,?,?)",
                           [(now.isoformat(timespec="seconds"), cdir.name, n, p_, r_) for n, p_, r_ in meters(data)])
             c.commit()
-        log(cdir.name, store[cdir.name], "")
+        log(cdir.name, store[cdir.name], note)
     write_private(LIVE, json.dumps(store, indent=1) + "\n")
     return store
 
 
 def live_view(c, store, with_forecast=True):
     """The one shape the menu bar, the shared report and the dashboard consume:
-    {account label: {fetched, stale, error, meters: [{name, pct, resets_at, forecast}]}}."""
+    {account label: {fetched, stale, error, account, meters: [{name, pct, resets_at, forecast}]}}.
+    `account` is the claude.ai identity (or None): it is what lets the dashboard show one row per
+    plan account instead of one per person per Mac."""
     out = {}
     for acct, v in store.items():
         ms = meters(v["data"]) if v["data"] else []
         out[acct_label(acct)] = {
             "fetched": v["fetched"], "stale": bool(v["error"] and ms), "error": v["error"],
+            "account": identity_for(acct),
             "meters": [{"name": n, "pct": p, "resets_at": r,
                         "forecast": forecast(c, acct, n, p, r) if with_forecast else None} for n, p, r in ms]}
     return out
@@ -586,7 +644,23 @@ def cmd_menu(args):
                        "projects": sorted(({"project": p_, "tokens": total_tokens(x), "cost": round(x["cost"], 2)} for p_, x in pp.items()), key=lambda d: -d["tokens"])[:8]})
         first = (first - dt.timedelta(days=1)).replace(day=1)
     cfg = load_config()
+    # The app polls this every 300 s, so refreshing the shared report and the dashboard here is what
+    # keeps both within SHARE_EVERY_MIN of live for everyone who runs the app (`update` is for cron).
+    # It must never cost the menu bar its numbers, so the failure is reported in the feed, not raised.
+    share_error, shared_at = None, None
+    if cfg.get("reports_dir"):
+        try:
+            rd = Path(os.path.expanduser(cfg["reports_dir"]))
+            mine = rd / report_id(cfg)[2]
+            fresh = mine.exists() and (dt.datetime.now().timestamp() - mine.stat().st_mtime) / 60 <= SHARE_EVERY_MIN
+            if not fresh:
+                share(c, cfg, rd)
+                build_dashboard(rd)
+            shared_at = dt.datetime.fromtimestamp(mine.stat().st_mtime).astimezone().isoformat(timespec="seconds")
+        except Exception as e:
+            share_error = f"{type(e).__name__}: {e}"
     out = {"version": VERSION, "user": cfg.get("user"), "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+           "share_error": share_error, "shared_at": shared_at,
            "today": {"tokens": total_tokens(day), "cost": round(day["cost"], 2), "calls": day["calls"]},
            "week": {"tokens": total_tokens(week), "cost": round(week["cost"], 2)},
            "windows": windows, "live": live, "months": months,
@@ -604,12 +678,9 @@ def other_people(cfg, today):
     if not rd or not Path(rd).is_dir():
         return []
     me = install_id()
+    now = dt.datetime.now().astimezone()
     out = []
-    for p in sorted(Path(rd).glob("*.json")):
-        try:
-            r = json.loads(p.read_text())
-        except (OSError, ValueError):
-            continue
+    for r in load_reports(rd):
         if r.get("install_id") == me:
             continue
         days = r.get("days", {})
@@ -619,9 +690,15 @@ def other_people(cfg, today):
             c = sum(a.get("cost", 0) for d, a in days.items() if d >= lo)
             return {"tokens": t, "cost": round(c, 2)}
         a = days.get(today, {})
-        out.append({"user": r.get("user"), "host": r.get("host"), "updated": r.get("generated"),
+        gen = r.get("generated")
+        try:                                   # how stale their page is; nothing runs on their Mac on our say-so
+            age = round((now - dt.datetime.fromisoformat(gen)).total_seconds() / 3600, 2) if gen else None
+        except ValueError:
+            age = None
+        out.append({"user": r.get("user"), "host": r.get("host"), "updated": gen, "age_hours": age,
                     "today": {"tokens": sum(a.get(k, 0) for k in COLS), "cost": round(a.get("cost", 0), 2), "calls": a.get("calls", 0)},
-                    "week": span(7), "month": span(30), "live": r.get("live") or {}})
+                    "week": span(7), "month": span(30), "live": r.get("live") or {},
+                    "account_ids": r.get("account_ids") or {}})
     return out
 
 
@@ -700,6 +777,8 @@ def build_summary(c, user, host, pricing, share_projects=False):
         "user": user, "host": host, "install_id": install_id(), "tool_version": VERSION,
         "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "accounts": sorted(acct_label(a_) for a_ in accounts),
+        # label -> claude.ai account uuid, so another Mac can tell "the same account" from "the same name"
+        "account_ids": {acct_label(d.name): i["id"] for d in config_dirs() for i in [account_identity(d)] if i},
         "live": live_view(c, load_live()),
         "days": {d: {**{k: a[k] for k in COLS}, "calls": a["calls"], "cost": round(a["cost"], 2),
                      "models": {m: {**{k: x[k] for k in COLS}, "tokens": total_tokens(x), "calls": x["calls"], "cost": round(x["cost"], 2)}
@@ -713,31 +792,51 @@ def build_summary(c, user, host, pricing, share_projects=False):
     }
 
 
-def cmd_share(args):
-    user, host = whoami(args)
-    cfg = load_config()
-    if getattr(args, "projects", None) is not None:
-        cfg["share_projects"] = bool(args.projects); save_config(cfg)
-    share_projects = bool(cfg.get("share_projects"))
-    rd = reports_dir(args)
-    out = rd / f"{user}@{host}-{install_id()}.json"
+def report_id(cfg):
+    """(your name, this Mac's short host name, the file name `share` writes). One function, so
+    menu-json can find the file `share` wrote without guessing at the name."""
+    user = cfg.get("user") or os.environ.get("USER", "unknown")
+    host = socket.gethostname().split(".")[0]
+    return user, host, f"{user}@{host}-{install_id()}.json"
+
+
+def share(c, cfg, rd):
+    """Write this Mac's report into the shared folder and return (path, name of the old-style file
+    removed or None). Prints nothing — menu-json calls this too and its stdout is the app's JSON."""
+    rd = Path(rd)
+    rd.mkdir(parents=True, exist_ok=True)
+    user, host, name = report_id(cfg)
+    out = rd / name
     # temp file + rename: a sync client or another Mac's dashboard never sees a half-written report
     tmp = out.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(build_summary(db(), user, host, load_pricing(), share_projects), indent=1) + "\n")
+    tmp.write_text(json.dumps(build_summary(c, user, host, load_pricing(), bool(cfg.get("share_projects"))), indent=1) + "\n")
     os.replace(tmp, out)
     old = rd / f"{user}@{host}.json"          # the pre-0.1.21 name of this same report
     if old.exists():
         old.unlink()
-        print(f"removed {old.name} (this report is now {out.name})")
-    print(f"wrote {out}" + ("" if share_projects else "  (project names not shared; `share --projects` to include them)"))
+        return out, old.name
+    return out, None
+
+
+def cmd_share(args):
+    whoami(args)                              # --user, if given, is remembered before the report is built
+    cfg = load_config()
+    if getattr(args, "projects", None) is not None:
+        cfg["share_projects"] = bool(args.projects); save_config(cfg)
+    rd = reports_dir(args)
+    out, removed = share(db(), cfg, rd)
+    if removed:
+        print(f"removed {removed} (this report is now {out.name})")
+    print(f"wrote {out}" + ("" if cfg.get("share_projects") else "  (project names not shared; `share --projects` to include them)"))
 
 
 # ---------- dashboard ----------
-def cmd_dashboard(args):
-    import dashboard
-    rd = reports_dir(args)
-    reps = []
-    for p in sorted(rd.glob("*.json")):
+def load_reports(rd):
+    """Every usable report in the shared folder, newest one per Mac. Two files can describe the same
+    Mac — 0.1.21 renamed <user>@<host>.json to <user>@<host>-<id>.json, and a reinstall makes a new id —
+    so the older `generated` is ignored and said so on stderr. Never deleted: other people's files are theirs."""
+    best = {}
+    for p in sorted(Path(rd).glob("*.json")):
         try:
             r = json.loads(p.read_text())
         except (OSError, ValueError) as e:   # mid-sync or half-written file: skip it, say so
@@ -748,11 +847,35 @@ def cmd_dashboard(args):
             print(f"skipping {p.name}: not a jusage report (missing {', '.join(missing) or 'day table'}; "
                   f"written by jusage {r.get('tool_version', '?') if isinstance(r, dict) else '?'})", file=sys.stderr)
             continue
-        reps.append(r)
+        key = (r["user"], r["host"])
+        prev = best.get(key)
+        if prev is None:
+            best[key] = (p, r)
+            continue
+        newer, older = ((p, r), prev) if (r.get("generated") or "") > (prev[1].get("generated") or "") else (prev, (p, r))
+        print(f"ignoring {older[0].name}: {newer[0].name} is a newer report for {key[0]}@{key[1]}", file=sys.stderr)
+        best[key] = newer
+    return [r for _, r in best.values()]
+
+
+def build_dashboard(rd, out=None):
+    """Render every report in the folder into one page; returns (path, reports).
+    RuntimeError when the folder holds none — the caller decides whether that is fatal."""
+    import dashboard
+    reps = load_reports(rd)
     if not reps:
-        sys.exit(f"no reports in {rd} — run `share` first")
-    out = Path(args.out) if args.out else rd.parent / "dashboard.html"
+        raise RuntimeError(f"no reports in {rd} — run `share` first")
+    out = Path(out) if out else Path(rd).parent / "dashboard.html"
     out.write_text(dashboard.render(reps, VERSION))
+    return out, reps
+
+
+def cmd_dashboard(args):
+    rd = reports_dir(args)
+    try:
+        out, reps = build_dashboard(rd, args.out)
+    except RuntimeError as e:
+        sys.exit(str(e))
     print(f"wrote {out}  ({len(reps)} people: {', '.join(r['user'] + '@' + r['host'] for r in reps)})")
     if args.open:
         import subprocess
