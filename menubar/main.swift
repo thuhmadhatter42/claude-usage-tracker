@@ -466,6 +466,8 @@ struct ContentView: View {
                     Label("shared report not updated: " + se, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(th.warn).lineLimit(3)
                 }
+                // my name at header size, Alex's below at the same size: two people, two blocks, seen at a glance
+                if model.shown("person:" + me) { Text(me).font(.title3.weight(.bold)) }
                 // meters
                 let lives = f.live.filter { model.shown("acct:" + $0.key) }.sorted { $0.key < $1.key }
                 let anyMeters = lives.contains { !$0.value.meters.isEmpty }
@@ -513,7 +515,7 @@ struct ContentView: View {
                     ForEach(others) { p in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .firstTextBaseline) {
-                                Text(p.user).font(.callout.weight(.semibold))
+                                Text(p.user).font(.title3.weight(.bold))
                                 Text(p.host).font(.caption).foregroundStyle(.tertiary)
                                 Spacer()
                                 let asOf = asOfText(p.updated)
