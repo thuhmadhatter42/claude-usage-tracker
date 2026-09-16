@@ -25,14 +25,21 @@ case "${1:-}" in
     fi
     ;;
   app)
-    if [ -d "$DIR/jusage.app" ]; then open "$DIR/jusage.app"; else echo "No jusage.app here; run install.command (needs Command Line Tools)."; fi
+    if [ -d /Applications/jusage.app ]; then open -a /Applications/jusage.app
+    elif [ -d "$DIR/jusage.app" ]; then open "$DIR/jusage.app"
+    else echo "No jusage.app; run $DIR/install.sh (needs Command Line Tools)."; fi
     ;;
   upgrade)
     if [ -d "$DIR/.git" ]; then
       git -C "$DIR" pull --ff-only && echo "jusage $(cat "$DIR/VERSION")"
-      [ -d "$DIR/menubar" ] && command -v swiftc >/dev/null 2>&1 && bash "$DIR/menubar/build.sh" "$DIR" 2>&1 | tail -1
+      if [ -d "$DIR/menubar" ] && command -v swiftc >/dev/null 2>&1 && bash "$DIR/menubar/build.sh" "$DIR" 2>&1 | tail -1; then
+        if [ -d /Applications/jusage.app ]; then
+          osascript -e 'tell application "jusage" to quit' >/dev/null 2>&1; sleep 1
+          ditto "$DIR/jusage.app" /Applications/jusage.app && open -a /Applications/jusage.app && echo "/Applications/jusage.app updated and reopened"
+        fi
+      fi
     else
-      echo "This copy was installed without git. Re-run install.command from a fresh download to upgrade."
+      echo "This copy was installed without git. Re-run install.sh to upgrade."
     fi
     ;;
   help|-h|--help)

@@ -1,5 +1,5 @@
 // jusage menu bar — a status item + popover over `claude_usage.py menu-json`.
-// Built by install.command with swiftc (Command Line Tools), no Xcode needed.
+// Built by install.sh with swiftc (Command Line Tools), no Xcode needed.
 import Cocoa
 import SwiftUI
 import ServiceManagement
@@ -466,7 +466,7 @@ struct ContentView: View {
                     Label("shared report not updated: " + se, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(th.warn).lineLimit(3)
                 }
-                // my name at header size, Alex's below at the same size: two people, two blocks, seen at a glance
+                // my name at header size, the others below at the same size: one block per person, seen at a glance
                 if model.shown("person:" + me) { Text(me).font(.title3.weight(.bold)) }
                 // meters
                 let lives = f.live.filter { model.shown("acct:" + $0.key) }.sorted { $0.key < $1.key }

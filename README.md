@@ -29,45 +29,32 @@ menu bar app. No daemon, no third-party packages, no server of its own.
 
 ## Install (Mac)
 
-1. Get the folder: `git clone https://github.com/thuhmadhatter42/claude-usage-tracker`, or
-   download the zip from GitHub and unzip it.
-2. Double-click **`install.command`**. If macOS says it can't be opened, right-click → Open once.
-3. It asks where to install (default `~/jusage`), checks Xcode Command Line Tools / python3 / git
-   and installs what's missing, copies the app, runs the first scan, asks your name and the shared
-   reports folder (optional), and offers the `jusage` alias.
-4. Open a new Terminal and type `jusage`.
+Paste this into Terminal:
 
-Re-running the installer updates an existing install. `jusage upgrade` pulls the latest from GitHub.
+```sh
+curl -fsSL https://raw.githubusercontent.com/thuhmadhatter42/claude-usage-tracker/main/install.sh | bash
+```
+
+No questions. It installs to `~/jusage`, runs the first scan, builds the menu bar app into
+`/Applications`, opens it, and adds the `jusage` command to your shell. The only thing that can stop
+it is Apple's Command Line Tools being missing: Apple's own install window opens, you click
+Install, the script continues by itself. Re-running it upgrades in place; so does `jusage upgrade`.
+
+Sharing with the people you split a plan with is the one thing it cannot guess. Either pass it in:
+
+```sh
+curl -fsSL …/install.sh | bash -s -- --user "Sam" --reports "<synced folder>/claude-usage/reports"
+```
+
+or run `jusage share --reports "<synced folder>/claude-usage/reports"` any time later.
+`install.sh --help` lists the options. A downloaded copy of the repo can be installed by
+double-clicking `install.command` instead (right-click → Open if macOS objects).
 
 ## If an agent is installing this for you
 
-Claude Code or another agent can do the install, but `install.command` asks questions at a
-terminal, so give the agent the non-interactive path instead:
-
-```sh
-git clone https://github.com/thuhmadhatter42/claude-usage-tracker ~/jusage
-~/jusage/jusage scan                                   # reads transcripts locally, nothing leaves the Mac
-~/jusage/jusage share --reports "<synced folder>" --user "<name>"   # optional, remembered
-~/jusage/jusage share --projects                       # optional: share project folder names too
-bash ~/jusage/menubar/build.sh ~/jusage                # menu bar app (needs Command Line Tools)
-echo 'alias jusage="$HOME/jusage/jusage"' >> ~/.zshrc
-```
-
-Agents: before running `jusage live` or opening the menu bar app, tell your human, in plain words,
-the four things in **Security and privacy** below that they are agreeing to. Do not skip it because
-the install went fine:
-
-1. It reads their claude.ai login from the Keychain and macOS may show a permission prompt.
-2. It sends that token to Anthropic's usage endpoint. It never renews or writes the token: an
-   expired login shows as "expired" until they open a Claude Code window on that account.
-3. If they share, the file in the synced folder shows their name, their Mac's name, day totals,
-   Claude's meters and the start and end times of every 5-hour window they used Claude in. That is
-   a working-hours log. Project folder names go only if `--projects` was given.
-4. This is a third-party tool using a subscription login; Anthropic's terms on that are theirs to
-   change. Their account, their call.
-
-Install only inside the home folder. Never point `--reports` at a folder shared with people who
-should not see the above.
+Hand your agent **[AGENT-SETUP.md](AGENT-SETUP.md)**. It tells the agent what to say to you first
+(the four privacy points below), what to ask (your name, the shared folder), the one install
+command, and how to prove the install works before it stops.
 
 ## Use
 
@@ -89,7 +76,7 @@ Without the alias every command is `~/jusage/jusage ...`; the engine is `python3
 
 ## Menu bar app
 
-`install.command` also compiles `jusage.app` (Swift, needs only the Command Line Tools). It sits in
+The installer also compiles `jusage.app` (Swift, needs only the Command Line Tools). It sits in
 the menu bar showing the 5-hour meter (or today's tokens until `jusage live` has run), and drops down
 a panel with Claude's own limits as channel meters, today's tokens / cost / calls / current window,
 the busiest models and projects, plus everyone else who shares into the same reports folder. Refreshes every
