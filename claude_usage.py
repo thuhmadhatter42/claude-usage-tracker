@@ -387,34 +387,56 @@ class LoginError(Exception):
     """No usable claude.ai login for a config dir. The message is what the user should do."""
 
 
-def keychain_service(cdir):
-    """Claude Code keeps each config dir's claude.ai login in the macOS Keychain under
-    'Claude Code-credentials-<sha256(config dir)[:8]>'. The unsuffixed 'Claude Code-credentials'
-    item is a leftover from older builds and can hold a different account's login, so it is never read."""
+def keychain_services(cdir):
+    """Keychain service names to try for this config dir, in order. Claude Code keeps each config
+    dir's claude.ai login under 'Claude Code-credentials-<sha256(config dir)[:8]>'. For the default
+    ~/.claude some builds (2.1.27x seen) still write the login to the unsuffixed
+    'Claude Code-credentials' item and leave the hashed one holding only mcpOAuth, so for that one
+    dir the unsuffixed item is the fallback when the hashed item has no claudeAiOauth. Never for
+    any other dir: on a Mac with several accounts the unsuffixed item can hold another account."""
     import hashlib
-    return "Claude Code-credentials-" + hashlib.sha256(str(cdir).encode()).hexdigest()[:8]
+    names = ["Claude Code-credentials-" + hashlib.sha256(str(cdir).encode()).hexdigest()[:8]]
+    if cdir == HOME / ".claude":
+        names.append("Claude Code-credentials")
+    return names
+
+
+def keychain_service(cdir):
+    return keychain_services(cdir)[0]
 
 
 def read_credentials(cdir):
     """The credentials JSON Claude Code wrote for this config dir: the Keychain on macOS,
-    <config dir>/.credentials.json elsewhere. Read only, never written."""
+    <config dir>/.credentials.json elsewhere. Read only, never written. On macOS the hashed item
+    wins; the unsuffixed item is read only for ~/.claude and only when the hashed one has no
+    claudeAiOauth (see keychain_services)."""
     if sys.platform == "darwin":
         import subprocess
-        try:
-            r = subprocess.run(["security", "find-generic-password", "-s", keychain_service(cdir), "-w"],
-                               capture_output=True, text=True, timeout=30)
-        except subprocess.TimeoutExpired:
-            raise LoginError("the Keychain did not answer in 30 s; a permission dialog is probably waiting on screen (click Always Allow)") from None
-        if r.returncode != 0:
+        found = None
+        for svc in keychain_services(cdir):
+            try:
+                r = subprocess.run(["security", "find-generic-password", "-s", svc, "-w"],
+                                   capture_output=True, text=True, timeout=30)
+            except subprocess.TimeoutExpired:
+                raise LoginError("the Keychain did not answer in 30 s; a permission dialog is probably waiting on screen (click Always Allow)") from None
+            if r.returncode != 0:
+                continue
+            try:
+                creds = json.loads(r.stdout.strip())
+            except json.JSONDecodeError:
+                continue
+            if found is None:
+                found = creds
+            if (creds.get("claudeAiOauth") or {}).get("accessToken"):
+                return creds
+        if found is None:
             raise LoginError("no claude.ai login in the Keychain for this config dir; run `claude /login` there")
-        raw = r.stdout.strip()
-    else:
-        f = cdir / ".credentials.json"
-        if not f.exists():
-            raise LoginError(f"no claude.ai login ({f} missing); run `claude /login` there")
-        raw = f.read_text()
+        return found
+    f = cdir / ".credentials.json"
+    if not f.exists():
+        raise LoginError(f"no claude.ai login ({f} missing); run `claude /login` there")
     try:
-        return json.loads(raw)
+        return json.loads(f.read_text())
     except json.JSONDecodeError:
         raise LoginError("the stored login is not valid JSON; run `claude /login` for this config dir") from None
 

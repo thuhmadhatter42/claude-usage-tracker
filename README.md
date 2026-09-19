@@ -151,6 +151,21 @@ Read this before pointing it at your own login.
 
 Found something? Open an issue, or for anything sensitive email the address on the GitHub profile.
 
+## Upgrading to 0.1.28
+
+Re-run the installer line from the top of this page. Two things change:
+
+- **Keychain fallback for the default `~/.claude`.** Some Claude Code builds (2.1.27x) keep that
+  dir's login in the unsuffixed `Claude Code-credentials` item and leave the hashed item with only
+  `mcpOAuth`, which made jusage label the account STALE while `claude` worked fine. jusage now
+  reads the hashed item first and, for `~/.claude` only, falls back to the unsuffixed item when the
+  hashed one has no `claudeAiOauth`. Any earlier note telling you to delete the unsuffixed item is
+  withdrawn: leave it alone, it may be your live login.
+- **Bundle id is now `com.goatdguild.jusage`.** The menu bar app's saved choices (theme, bar
+  choice, hidden rows) reset once, and if "open at login" was on, turn it on again in the app;
+  the old `com.goatedguild.jusage` login item can be removed in System Settings → General →
+  Login Items.
+
 ## Upgrading to 0.1.22
 
 Nothing to do. On the first run your account labels change from `<you> #1` / `#2` to the account

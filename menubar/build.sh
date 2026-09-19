@@ -13,7 +13,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
 <plist version="1.0"><dict>
   <key>CFBundleName</key><string>jusage</string>
   <key>CFBundleDisplayName</key><string>jusage</string>
-  <key>CFBundleIdentifier</key><string>com.goatedguild.jusage</string>
+  <key>CFBundleIdentifier</key><string>com.goatdguild.jusage</string>
   <key>CFBundleExecutable</key><string>jusage</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VER</string>
