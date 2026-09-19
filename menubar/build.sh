@@ -31,4 +31,4 @@ swiftc -O -target "$(uname -m)-apple-macosx13.0" \
   "$HERE/main.swift" -o "$APP/Contents/MacOS/jusage"
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 rm -rf "$FINAL" && mv "$APP" "$FINAL"
-echo "built $APP ($VER)"
+echo "built $FINAL ($VER)"
