@@ -16,7 +16,9 @@ Say these four things to me in plain words. Do not skip this because the install
    uses) to read my 5-hour and 7-day meters. Nothing else leaves this Mac unless I share.
 3. If I share, a file in the synced folder shows my name, my Mac's name, day totals by model and
    account, Claude's meters, and the start and end of every 5-hour window I used Claude in.
-   That is a working-hours log. Project folder names go only if I ask for `--projects`.
+   That is a working-hours log. It also carries the email address and claude.ai account id of
+   every account on this Mac it tracks — that is what lines up the same account across people's
+   files instead of showing it twice. Project folder names go only if I ask for `--projects`.
 4. It is a third-party tool using a subscription login; Anthropic's terms on that are theirs to
    change. My account, my call.
 
@@ -48,8 +50,9 @@ bar app into `/Applications/jusage.app`, opens it, and adds the `jusage` command
 ```
 
 - The menu bar shows a percentage (or today's tokens) at the right of the menu bar. Click it.
-- If sharing: `<shared folder>/claude-usage/reports/` now holds a `<name>@<mac>-<id>.json` and
-  `dashboard.html` next to it opens in a browser and shows me.
+- If sharing: `<shared folder>/claude-usage/reports/` now holds a `<name>@<mac>-<id>.json`, and
+  `~/.claude-usage/dashboard.html` on this Mac (built by `jusage dashboard` or the menu bar app)
+  opens in a browser and shows me.
 - If `live` says `expired` for an account: open a Claude Code window on that account once, then
   `~/jusage/jusage live` again. Never try to refresh or rewrite the login yourself.
 

@@ -39,8 +39,28 @@ func missingText(_ s: Split?) -> String {
 extension ISO8601DateFormatter {
     static let minutes: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f }()
 }
-struct Live: Decodable { let fetched: String?; let stale: Bool?; let error: String?; let meters: [Meter] }
-struct Tokens: Decodable { let tokens: Double; let cost: Double; let calls: Int? }
+struct Live: Decodable { let fetched: String?; let stale: Bool?; let error: String?; let meters: [Meter]? }
+struct Tokens: Decodable { let tokens: Double; let cost: Double; let calls: Int?; let unpriced: Int? }
+/// Decodes a JSON array element-by-element, dropping any that fail instead of failing the whole
+/// array (and with it every field decoded alongside it) — one malformed peer report must not
+/// blank the whole app. `Empty` is a JSON-object-shaped catch-all: decoding an element as `Empty`
+/// after `T` fails still consumes it, so the unkeyed container's cursor advances past it.
+struct LossyArray<T: Decodable>: Decodable {
+    let elements: [T]
+    struct Empty: Decodable {}
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var result: [T] = []
+        while !container.isAtEnd {
+            if let value = try? container.decode(T.self) {
+                result.append(value)
+            } else {
+                _ = try? container.decode(Empty.self)
+            }
+        }
+        self.elements = result
+    }
+}
 struct Window: Decodable, Identifiable { var id: String { account }; let account: String; let start: String; let end: String; let tokens: Double; let cost: Double; let open: Bool }
 struct ModelRow: Decodable, Identifiable { var id: String { model }; let model: String; let tokens: Double; let cost: Double }
 struct ProjectRow: Decodable, Identifiable { var id: String { project }; let project: String; let tokens: Double; let cost: Double }
@@ -59,7 +79,7 @@ struct Feed: Decodable {
     let version: String; let user: String?; let generated: String
     let today: Tokens; let week: Tokens; let windows: [Window]?
     let live: [String: Live]; let accounts: [String: Tokens]; let models: [ModelRow]; let dashboard: String?
-    let months: [Month]?; let people: [Person]?; let projects: [ProjectRow]?
+    let months: [Month]?; let people: LossyArray<Person>?; let projects: [ProjectRow]?
     let share_error: String?; let shared_at: String?
 }
 
@@ -211,7 +231,7 @@ final class Model: ObservableObject {
         var out: [BarChoice] = []
         let multi = f.live.count > 1
         for (acct, lv) in f.live.sorted(by: { $0.key < $1.key }) where shown("acct:" + acct) {
-            for m in lv.meters { out.append(.init(id: "\(acct)|\(m.name)", label: (multi ? "\(acct) · " : "") + meterLabel(m.name))) }
+            for m in (lv.meters ?? []) { out.append(.init(id: "\(acct)|\(m.name)", label: (multi ? "\(acct) · " : "") + meterLabel(m.name))) }
         }
         out.append(.init(id: "today", label: "tokens today"))
         return out
@@ -227,7 +247,7 @@ final class Model: ObservableObject {
         let mode = effectiveBarMode
         if mode == "today" { return fmt(f.today.tokens) }
         let parts = mode.split(separator: "|", maxSplits: 1).map(String.init)
-        if parts.count == 2, let m = f.live[parts[0]]?.meters.first(where: { $0.name == parts[1] }) { return String(format: "%.0f%%", m.pct) }
+        if parts.count == 2, let m = f.live[parts[0]]?.meters?.first(where: { $0.name == parts[1] }) { return String(format: "%.0f%%", m.pct) }
         return fmt(f.today.tokens)
     }
 }
@@ -248,8 +268,8 @@ enum Alerts {
         guard let previous else { return }
         setup()
         for (acct, lv) in now.live where lv.stale != true {
-            for m in lv.meters {
-                guard let old = previous.live[acct]?.meters.first(where: { $0.name == m.name }) else { continue }
+            for m in (lv.meters ?? []) {
+                guard let old = previous.live[acct]?.meters?.first(where: { $0.name == m.name }) else { continue }
                 let label = "\(acct) · \(meterLabel(m.name))"
                 for line in [80.0, 95.0] where old.pct < line && m.pct >= line {
                     post("\(label) at \(Int(m.pct))%", line == 95 ? "Almost at the wall. \(resetsText(m.resets_at))" : "Past 80%. \(resetsText(m.resets_at))",
@@ -397,7 +417,7 @@ struct SettingsView: View {
     @ObservedObject var model: Model
     var body: some View {
         let me = model.feed?.user ?? "me"
-        let others = model.feed?.people ?? []
+        let others = model.feed?.people?.elements ?? []
         let accts = (model.feed?.live.keys.map { $0 } ?? []).sorted()
         VStack(alignment: .leading, spacing: 10) {
             Picker("Theme", selection: $model.themeID) {
@@ -470,15 +490,15 @@ struct ContentView: View {
                 if model.shown("person:" + me) { Text(me).font(.title3.weight(.bold)) }
                 // meters
                 let lives = f.live.filter { model.shown("acct:" + $0.key) }.sorted { $0.key < $1.key }
-                let anyMeters = lives.contains { !$0.value.meters.isEmpty }
+                let anyMeters = lives.contains { !($0.value.meters ?? []).isEmpty }
                 if model.shown("person:" + me), model.shown("sec:meters") {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(lives, id: \.key) { acct, lv in
-                            AccountHeader(acct: acct, meters: lv.meters, th: th)
-                            ForEach(lv.meters) { MeterRow(meter: $0, tag: "", th: th, forecast: model.shown("sec:forecast"), me: f.user) }
+                            AccountHeader(acct: acct, meters: lv.meters ?? [], th: th)
+                            ForEach(lv.meters ?? []) { MeterRow(meter: $0, tag: "", th: th, forecast: model.shown("sec:forecast"), me: f.user) }
                             if let e = lv.error {
                                 // meters present + error = the last good reading; say when it is from and why it stopped
-                                let when = lv.meters.isEmpty ? "" : "Stale since \((lv.fetched ?? "").dropFirst(11).prefix(5)): "
+                                let when = (lv.meters ?? []).isEmpty ? "" : "Stale since \((lv.fetched ?? "").dropFirst(11).prefix(5)): "
                                 Label(when + e, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary).lineLimit(3)
                             }
                         }
@@ -495,6 +515,10 @@ struct ContentView: View {
                         Stat(value: money(f.today.cost), label: "api-equivalent", big: true)
                         Stat(value: "\(f.today.calls ?? 0)", label: "calls")
                     }
+                    if (f.today.unpriced ?? 0) > 0 {
+                        Label("\(f.today.unpriced ?? 0) calls on models not in pricing.json — cost shown without them", systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                    }
                     let wins = (f.windows ?? []).filter { $0.open && model.shown("acct:" + $0.account) }
                     if !wins.isEmpty, model.shown("sec:window") {
                         HStack(alignment: .top, spacing: 22) {
@@ -509,7 +533,7 @@ struct ContentView: View {
                     }
                 }
                 // everyone else who shares into the same folder
-                let others = (f.people ?? []).filter { model.shown("person:" + $0.user) }
+                let others = (f.people?.elements ?? []).filter { model.shown("person:" + $0.user) }
                 if !others.isEmpty, model.shown("sec:people") {
                     Divider()
                     ForEach(others) { p in
@@ -531,8 +555,8 @@ struct ContentView: View {
                             }
                             if model.shown("sec:meters") {
                                 ForEach(p.live.sorted { $0.key < $1.key }, id: \.key) { acct, lv in
-                                    AccountHeader(acct: acct, meters: lv.meters, th: th)
-                                    ForEach(lv.meters) { MeterRow(meter: $0, tag: "", th: th, forecast: model.shown("sec:forecast")) }
+                                    AccountHeader(acct: acct, meters: lv.meters ?? [], th: th)
+                                    ForEach(lv.meters ?? []) { MeterRow(meter: $0, tag: "", th: th, forecast: model.shown("sec:forecast")) }
                                 }
                             }
                         }
@@ -651,8 +675,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let f = model.feed {
             var worst = 0.0, fableGap = 0.0
             for lv in f.live.values {
-                for m in lv.meters { worst = max(worst, m.pct) }
-                if let fab = lv.meters.first(where: { $0.name == "seven_day_fable" }), let all = lv.meters.first(where: { $0.name == "seven_day" }) {
+                for m in (lv.meters ?? []) { worst = max(worst, m.pct) }
+                if let fab = lv.meters?.first(where: { $0.name == "seven_day_fable" }), let all = lv.meters?.first(where: { $0.name == "seven_day" }) {
                     fableGap = max(fableGap, fab.pct - all.pct)
                 }
             }

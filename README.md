@@ -144,7 +144,8 @@ Read this before pointing it at your own login.
   that before sharing with people who should not have it), and Claude's current meters with their
   reset times. **Project folder names are not included unless you run `jusage share --projects`.**
   Never paths, session titles, prompts, file names or content. The dashboard renders exactly that
-  and nothing more.
+  and nothing more. Day totals in the shared file are the reporter's own local calendar days —
+  not normalized to a shared time zone.
 - **Your own account, at your own risk.** This uses your subscription login from outside Claude
   Code. It only reads the usage endpoint with the token Claude Code already holds, but
   Anthropic's terms for third-party use of subscription logins are theirs to change; run it on
@@ -155,11 +156,20 @@ Read this before pointing it at your own login.
 
 Found something? Open an issue, or for anything sensitive email the address on the GitHub profile.
 
-## Upgrading to 0.1.29
+## Upgrading to 0.1.31
 
-Nothing to do beyond `jusage upgrade`. The login lookup is now exhaustive (every Keychain item
-Claude Code could have used, freshest login wins) and `jusage doctor` shows its work, so a meter
-that says "no login" or STALE has a printable reason instead of a guess.
+Nothing to do beyond `jusage upgrade`. The login lookup is exhaustive (every Keychain item Claude
+Code could have used, freshest login wins) and `jusage doctor` exists — per config dir, which
+Keychain items were tried and which one is in use — so a meter that says "no login" or STALE has a
+printable reason instead of a guess.
+
+The dashboard is now written to `~/.claude-usage/dashboard.html` **on each Mac**: every Mac renders
+its own page from the shared reports folder, instead of every Mac racing to rewrite one shared
+`dashboard.html`. The old shared `dashboard.html` that used to sit next to the reports folder can
+be deleted; `jusage dashboard --out <path>` still writes the page anywhere you ask. Reports in the
+shared folder are now matched by each install's own id rather than by name + hostname, so renaming
+this Mac or running `jusage set-user` no longer leaves a duplicate person behind in the shared
+folder.
 
 ## Upgrading to 0.1.28
 

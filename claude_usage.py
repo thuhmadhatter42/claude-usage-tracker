@@ -25,12 +25,19 @@ DB = STATE / "usage.db"
 CONFIG = STATE / "config.json"
 BLOCK_HOURS = 5
 COLS = ("input", "cache_5m", "cache_1h", "cache_read", "output")
+SCHEMA = 1
+RECORD_COLS = ("key", "ts", "day", "account", "model", "project", "session") + COLS
 
 
 # ---------- config ----------
 def load_config():
     if CONFIG.exists():
-        return json.loads(CONFIG.read_text())
+        try:
+            return json.loads(CONFIG.read_text())
+        except ValueError:
+            bad = CONFIG.with_suffix(".json.corrupt")
+            os.replace(CONFIG, bad)
+            print(f"config.json was not valid JSON; moved to {bad.name} and starting fresh (re-run `share --reports … --user …`)", file=sys.stderr)
     return {}
 
 
@@ -65,9 +72,11 @@ def reports_dir(args):
         sys.exit("No reports folder set. Run once with --reports <folder> "
                  "(a folder you sync with the people you share a plan with) and it is remembered.")
     p = Path(os.path.expanduser(d))
-    p.mkdir(parents=True, exist_ok=True)
     if getattr(args, "reports", None):
+        p.mkdir(parents=True, exist_ok=True)      # only the explicit choice creates it; a missing synced folder is an error, not a new folder
         cfg = load_config(); cfg["reports_dir"] = str(p); save_config(cfg)
+    elif not p.is_dir():
+        sys.exit(f"shared folder {p} is missing (sync volume not mounted?) — nothing written; run with --reports to pick another")
     return p
 
 
@@ -147,21 +156,48 @@ def db():
     """)
     # Rows from backup copies of a config dir (scanned before 0.1.4 excluded them) are deleted once here.
     c.execute("DELETE FROM records WHERE lower(account) LIKE '%.bak%' OR lower(account) LIKE '%backup%' OR lower(account) LIKE '%.old%'")
+    # schema version: bump SCHEMA and add an `if v < N:` ALTER block here when a column is added
+    v = c.execute("PRAGMA user_version").fetchone()[0]
+    if v < SCHEMA:
+        c.execute(f"PRAGMA user_version={SCHEMA}")
     c.commit()
     return c
 
 
 # ---------- scan ----------
+def is_config_dir(p):
+    """A Claude Code config dir is one that has been used: transcripts (projects/) or a login
+    (.claude.json). A dir with a login but no sessions yet still has meters to show."""
+    p = Path(p)
+    return p.is_dir() and ((p / "projects").is_dir() or (p / ".claude.json").is_file()) \
+        and not any(x in p.name.lower() for x in (".bak", "backup", ".old"))
+
+
 @functools.lru_cache(maxsize=None)
 def config_dirs():
-    """Every Claude Code config dir on this Mac: ~/.claude* with a projects/ folder, plus
-    $CLAUDE_CONFIG_DIR. Backup copies (.bak / backup / .old in the name) are not accounts."""
-    dirs = {p for p in HOME.glob(".claude*") if (p / "projects").is_dir()
-            and not any(x in p.name.lower() for x in (".bak", "backup", ".old"))}
+    """Every Claude Code config dir on this Mac: ~/.claude*, $CLAUDE_CONFIG_DIR, and every dir this
+    tool has ever seen (remembered in config.json, so the menu bar app — launched without anyone's
+    shell environment — shows the same accounts the CLI does)."""
+    dirs = {p for p in HOME.glob(".claude*") if is_config_dir(p)}
     env = os.environ.get("CLAUDE_CONFIG_DIR")
-    if env and (Path(env) / "projects").is_dir():
-        dirs.add(Path(env).resolve())
-    return tuple(sorted(dirs))
+    if env and is_config_dir(Path(env).expanduser()):
+        dirs.add(Path(env).expanduser().resolve())
+    cfg = load_config()
+    known = set(cfg.get("config_dirs") or [])
+    dirs |= {Path(d) for d in known if is_config_dir(d)}
+    found = sorted(str(d) for d in dirs)
+    if set(found) - known:
+        cfg["config_dirs"] = sorted(known | set(found)); save_config(cfg)
+    return tuple(Path(d) for d in found)
+
+
+@functools.lru_cache(maxsize=None)
+def dir_key(cdir):
+    """The name a config dir is stored and shown under: its basename, qualified by the parent only
+    when two config dirs on this Mac share a basename (/Volumes/X/.claude next to ~/.claude)."""
+    cdir = Path(cdir)
+    twins = [d for d in config_dirs() if d.name == cdir.name and d != cdir]
+    return f"{cdir.parent.name}/{cdir.name}" if twins else cdir.name
 
 
 @functools.lru_cache(maxsize=None)
@@ -180,13 +216,22 @@ def account_identity(cdir):
                 found.append((f.stat().st_mtime, {"email": o["emailAddress"], "id": o["accountUuid"]}))
         except (OSError, ValueError, AttributeError):
             continue
-    return max(found)[1] if found else None
+    cfg = load_config()
+    cache = cfg.setdefault("identities", {})
+    key = dir_key(cdir)
+    if found:
+        ident = max(found)[1]
+        if cache.get(key) != ident:
+            cache[key] = ident; save_config(cfg)
+        return ident
+    # the file is mid-write or unreadable this instant: the last identity seen keeps the label steady
+    return cache.get(key)
 
 
 def identity_for(name):
     """The identity of the config dir called `name` on this Mac, or None."""
     for d in config_dirs():
-        if d.name == name:
+        if dir_key(d) == name:
             return account_identity(d)
     return None
 
@@ -199,7 +244,7 @@ def acct_label(name):
     config dir is seen and remembered in config.json, so the fallback never renumbers the others."""
     cfg = load_config()
     numbers = cfg.setdefault("accounts", {})
-    new = [d.name for d in config_dirs() if d.name not in numbers]
+    new = [dir_key(d) for d in config_dirs() if dir_key(d) not in numbers]
     if new:
         for n in sorted(new):
             numbers[n] = max(numbers.values(), default=0) + 1
@@ -219,16 +264,17 @@ def forecast(c, account, meter_name, pct_now, resets_at):
         return None
     pricing = load_pricing()
     # readings belong to the same limit period when they share a reset time (to the minute)
-    log = c.execute("SELECT ts, pct FROM meter_log WHERE account=? AND meter=? AND COALESCE(substr(resets_at,1,16),'')=? ORDER BY ts",
+    log = c.execute("SELECT ts, pct FROM meter_log WHERE account=? AND meter=? AND COALESCE(substr(resets_at,1,16),'')=? ORDER BY datetime(ts)",
                     (account, meter_name, (resets_at or "")[:16])).fetchall()
     if len(log) < 2:
         return None
-    rows = c.execute("SELECT ts, model, input, cache_5m, cache_1h, cache_read, output FROM records WHERE account=? AND ts>=? ORDER BY ts",
+    rows = c.execute("SELECT ts, model, input, cache_5m, cache_1h, cache_read, output FROM records WHERE account=? AND datetime(ts)>=datetime(?) ORDER BY datetime(ts)",
                      (account, log[0]["ts"])).fetchall()
     spend_at = []   # cumulative api-equivalent at each reading
     j, acc = 0, 0.0
     for r in log:
-        while j < len(rows) and rows[j]["ts"] <= r["ts"]:
+        r_at = dt.datetime.fromisoformat(r["ts"])
+        while j < len(rows) and dt.datetime.fromisoformat(rows[j]["ts"]) <= r_at:
             acc += cost_usd(rows[j], rate_for(rows[j]["model"], pricing)) or 0; j += 1
         spend_at.append(acc)
     d_pct = log[-1]["pct"] - log[0]["pct"]
@@ -238,7 +284,7 @@ def forecast(c, account, meter_name, pct_now, resets_at):
     per_pct = d_spend / d_pct                      # $ api-equivalent per 1% of this limit
     left = max(100 - pct_now, 0) * per_pct
     now = dt.datetime.now().astimezone()
-    recent = c.execute("SELECT model, input, cache_5m, cache_1h, cache_read, output FROM records WHERE account=? AND ts>=?",
+    recent = c.execute("SELECT model, input, cache_5m, cache_1h, cache_read, output FROM records WHERE account=? AND datetime(ts)>=datetime(?)",
                        (account, (now - dt.timedelta(hours=24)).isoformat(timespec="seconds"))).fetchall()
     pace = sum(cost_usd(r, rate_for(r["model"], pricing)) or 0 for r in recent) / 24   # $/hour, last day
     hours = min(left / pace, 24 * 365) if pace > 0 else None      # capped: a near-idle day would overflow timedelta
@@ -291,7 +337,7 @@ def scan(c, full=False):
     seen = dict(c.execute("SELECT path, size || ':' || mtime FROM files"))
     new_rows = files_read = 0
     for cdir in config_dirs():
-        account = cdir.name
+        account = dir_key(cdir)
         for path in glob.glob(str(cdir / "projects" / "**" / "*.jsonl"), recursive=True):
             st = os.stat(path)
             sig = f"{st.st_size}:{st.st_mtime}"
@@ -299,7 +345,7 @@ def scan(c, full=False):
                 continue
             files_read += 1
             rows = list(parse_file(path, account))
-            cur = c.executemany("INSERT OR IGNORE INTO records VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+            cur = c.executemany(f"INSERT OR IGNORE INTO records ({','.join(RECORD_COLS)}) VALUES ({','.join('?' * len(RECORD_COLS))})", rows)
             new_rows += cur.rowcount if cur.rowcount > 0 else 0
             c.execute("INSERT OR REPLACE INTO files VALUES (?,?,?)", (path, st.st_size, st.st_mtime))
     c.commit()
@@ -555,9 +601,11 @@ def meters(data):
         for e in limits:
             mdl = (e.get("scope") or {}).get("model") or {}
             model = (mdl.get("display_name") or mdl.get("displayName") or "").split(" ")[0].lower()
-            name = {"session": "five_hour", "weekly_all": "seven_day"}.get(e.get("kind", "")) or (f"seven_day_{model}" if model else None)
-            if name and name not in seen:
-                out.append((name, float(e["percent"]), iso_minutes(e.get("resets_at")))); seen.add(name)
+            name = {"session": "five_hour", "weekly_all": "seven_day"}.get(e.get("kind", "")) or (f"seven_day_{model}" if model else e.get("kind") or "limit")
+            base, n = name, 2
+            while name in seen:                    # two scoped limits sharing a first word: keep both, numbered
+                name = f"{base}_{n}"; n += 1
+            out.append((name, float(e["percent"]), iso_minutes(e.get("resets_at")))); seen.add(name)
         return out
     for k in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"):
         v = data.get(k)
@@ -618,25 +666,26 @@ def refresh_live(c, force=False, log=print):
     store = load_live()
     now = dt.datetime.now().astimezone()
     for cdir in config_dirs():
-        prev, note = store.get(cdir.name), ""
+        key = dir_key(cdir)
+        prev, note = store.get(key), ""
         if prev and prev["data"] and not prev["error"] and not force:
             age = (now - dt.datetime.fromisoformat(prev["fetched"])).total_seconds() / 60
             if reset_passed(prev["data"], now):
                 note = "reset passed, refetching"      # a new period behind the cache: the old % is a lie
             elif age < LIVE_TTL_MIN:
-                log(cdir.name, prev, f"cached {age:.0f} min ago, --force to refetch")
+                log(key, prev, f"cached {age:.0f} min ago, --force to refetch")
                 continue
         try:
             data = fetch_live(cdir)
         except (LoginError, RuntimeError) as e:
-            store[cdir.name] = {"fetched": prev["fetched"] if prev else None, "data": prev["data"] if prev else None, "error": str(e)}
+            store[key] = {"fetched": prev["fetched"] if prev else None, "data": prev["data"] if prev else None, "error": str(e)}
         else:
-            store[cdir.name] = {"fetched": now.isoformat(timespec="seconds"), "data": data, "error": None,
+            store[key] = {"fetched": now.isoformat(timespec="seconds"), "data": data, "error": None,
                                 "warning": login_warning(cdir)}
             c.executemany("INSERT OR IGNORE INTO meter_log VALUES (?,?,?,?,?)",
-                          [(now.isoformat(timespec="seconds"), cdir.name, n, p_, r_) for n, p_, r_ in meters(data)])
+                          [(now.isoformat(timespec="seconds"), key, n, p_, r_) for n, p_, r_ in meters(data)])
             c.commit()
-        log(cdir.name, store[cdir.name], note)
+        log(key, store[key], note)
     write_private(LIVE, json.dumps(store, indent=1) + "\n")
     return store
 
@@ -700,7 +749,8 @@ def blocks_summary(c, pricing):
             for r in b["rows"]: add(a, r, pricing)
             rows.append({"start": b["start"].isoformat(timespec="minutes"), "end": b["end"].isoformat(timespec="minutes"),
                          "tokens": total_tokens(a), "calls": a["calls"], "cost": round(a["cost"], 2)})
-        blk[acct_label(acct)] = rows
+        lab = acct_label(acct)
+        blk[lab] = sorted(blk.get(lab, []) + rows, key=lambda b: b["start"])[-50:]   # two config dirs on one account: one list
     return blk
 
 
@@ -724,11 +774,13 @@ def meter_split(meter_name, resets_at, account_label, reports):
         if not blk:
             continue
         user = r.get("user") or "someone"
-        if account_label not in blk:
-            missing.append(user)
+        match = next((k for k in blk if k.casefold() == account_label.casefold()), None)
+        if match is None:
+            if (r.get("tool_version") or "0") < "0.1.22":      # pre-0.1.22 labels can never line up; newer = simply not on this account
+                missing.append(user)
             continue
         cost = 0.0
-        for b in blk[account_label]:
+        for b in blk[match]:
             b0, b1 = when(b.get("start")), when(b.get("end"))
             if not b0 or not b1 or b1 <= b0:
                 continue
@@ -829,19 +881,21 @@ def cmd_menu(args):
             share_error = f"{type(e).__name__}: {e}"
     # the shared folder is read once here and handed to both consumers of it
     reports = load_reports(rd) if rd and rd.is_dir() else []
+    if REPORT_NOTES:
+        share_error = "; ".join(([share_error] if share_error else []) + REPORT_NOTES)
     splittable = split_reports(c, cfg, reports)
     for label, lv in live.items():
         for m in lv["meters"]:
             m["split"] = meter_split(m["name"], m["resets_at"], label, splittable)
     out = {"version": VERSION, "user": cfg.get("user"), "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
            "share_error": share_error, "shared_at": shared_at,
-           "today": {"tokens": total_tokens(day), "cost": round(day["cost"], 2), "calls": day["calls"]},
-           "week": {"tokens": total_tokens(week), "cost": round(week["cost"], 2)},
+           "today": {"tokens": total_tokens(day), "cost": round(day["cost"], 2), "calls": day["calls"], "unpriced": day["unpriced"]},
+           "week": {"tokens": total_tokens(week), "cost": round(week["cost"], 2), "unpriced": week["unpriced"]},
            "windows": windows, "live": live, "months": months,
-           "accounts": {acct_label(a_): {"tokens": total_tokens(x), "cost": round(x["cost"], 2)} for a_, x in accts.items()},
+           "accounts": merged_labels(accts),
            "models": sorted(({"model": m, "tokens": total_tokens(x), "cost": round(x["cost"], 2)} for m, x in models.items()), key=lambda d: -d["tokens"]),
            "projects": sorted(({"project": p_, "tokens": total_tokens(x), "cost": round(x["cost"], 2)} for p_, x in projs.items()), key=lambda d: -d["tokens"])[:8],
-           "dashboard": str(Path(cfg["reports_dir"]).parent / "dashboard.html") if cfg.get("reports_dir") else None,
+           "dashboard": str(STATE / "dashboard.html") if cfg.get("reports_dir") else None,
            "people": other_people(reports, today)}
     print(json.dumps(out))
 
@@ -942,18 +996,28 @@ def build_summary(c, user, host, pricing, share_projects=False):
         "generated": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "accounts": sorted(acct_label(a_) for a_ in accounts),
         # label -> claude.ai account uuid, so another Mac can tell "the same account" from "the same name"
-        "account_ids": {acct_label(d.name): i["id"] for d in config_dirs() for i in [account_identity(d)] if i},
+        "account_ids": {acct_label(dir_key(d)): i["id"] for d in config_dirs() for i in [account_identity(d)] if i},
         "live": live_view(c, load_live()),
-        "days": {d: {**{k: a[k] for k in COLS}, "calls": a["calls"], "cost": round(a["cost"], 2),
+        "days": {d: {**{k: a[k] for k in COLS}, "calls": a["calls"], "cost": round(a["cost"], 2), "unpriced": a["unpriced"],
                      "models": {m: {**{k: x[k] for k in COLS}, "tokens": total_tokens(x), "calls": x["calls"], "cost": round(x["cost"], 2)}
                                 for m, x in models[d].items()},
-                     "accounts": {acct_label(a_): {"tokens": total_tokens(x), "cost": round(x["cost"], 2)} for a_, x in accts[d].items()},
+                     "accounts": merged_labels(accts[d]),
                      "projects": ({p_: {"tokens": total_tokens(x), "cost": round(x["cost"], 2)}
                                    for p_, x in sorted(projs[d].items(), key=lambda kv: -total_tokens(kv[1]))[:10]}
                                   if share_projects else {})}
                  for d, a in sorted(days.items())},
         "blocks": blocks_summary(c, pricing),
     }
+
+
+def merged_labels(per_dir):
+    """{label: {tokens, cost}} from {config dir key: totals}, summing dirs that share a label."""
+    out = {}
+    for a_, x in per_dir.items():
+        lab = acct_label(a_)
+        o = out.setdefault(lab, {"tokens": 0, "cost": 0.0})
+        o["tokens"] += total_tokens(x); o["cost"] = round(o["cost"] + x["cost"], 2)
+    return out
 
 
 def report_id(cfg):
@@ -968,18 +1032,28 @@ def share(c, cfg, rd):
     """Write this Mac's report into the shared folder and return (path, name of the old-style file
     removed or None). Prints nothing — menu-json calls this too and its stdout is the app's JSON."""
     rd = Path(rd)
-    rd.mkdir(parents=True, exist_ok=True)
+    if not rd.is_dir():
+        raise RuntimeError(f"shared folder {rd} is missing (sync volume not mounted?) — report not written")
     user, host, name = report_id(cfg)
     out = rd / name
     # temp file + rename: a sync client or another Mac's dashboard never sees a half-written report
     tmp = out.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(build_summary(c, user, host, load_pricing(), bool(cfg.get("share_projects"))), indent=1) + "\n")
     os.replace(tmp, out)
+    removed = []
     old = rd / f"{user}@{host}.json"          # the pre-0.1.21 name of this same report
     if old.exists():
-        old.unlink()
-        return out, old.name
-    return out, None
+        old.unlink(); removed.append(old.name)
+    me = install_id()
+    for p in rd.glob("*.json"):               # this install under an earlier name or host name
+        if p == out:
+            continue
+        try:
+            if json.loads(p.read_text()).get("install_id") == me:
+                p.unlink(); removed.append(p.name)
+        except (OSError, ValueError):
+            continue
+    return out, (", ".join(removed) or None)
 
 
 def cmd_share(args):
@@ -1000,26 +1074,34 @@ def load_reports(rd):
     Mac — 0.1.21 renamed <user>@<host>.json to <user>@<host>-<id>.json, and a reinstall makes a new id —
     so the older `generated` is ignored and said so on stderr. Never deleted: other people's files are theirs."""
     best = {}
+    REPORT_NOTES.clear()
     for p in sorted(Path(rd).glob("*.json")):
         try:
             r = json.loads(p.read_text())
         except (OSError, ValueError) as e:   # mid-sync or half-written file: skip it, say so
-            print(f"skipping {p.name}: {e}", file=sys.stderr)
+            REPORT_NOTES.append(f"skipping {p.name}: {e}")
             continue
         missing = [k for k in ("user", "host", "days") if not isinstance(r, dict) or k not in r]
         if missing or not isinstance(r["days"], dict):
-            print(f"skipping {p.name}: not a jusage report (missing {', '.join(missing) or 'day table'}; "
-                  f"written by jusage {r.get('tool_version', '?') if isinstance(r, dict) else '?'})", file=sys.stderr)
+            REPORT_NOTES.append(f"skipping {p.name}: not a jusage report (missing {', '.join(missing) or 'day table'}; "
+                                f"written by jusage {r.get('tool_version', '?') if isinstance(r, dict) else '?'})")
             continue
-        key = (r["user"], r["host"])
+        # one row per INSTALL: the id is what tells two Macs with Apple's default name, or two
+        # people with the same first name, apart. Pre-0.1.21 files have no id and fall back to user@host.
+        key = r.get("install_id") or (r["user"], r["host"])
         prev = best.get(key)
         if prev is None:
             best[key] = (p, r)
             continue
         newer, older = ((p, r), prev) if (r.get("generated") or "") > (prev[1].get("generated") or "") else (prev, (p, r))
-        print(f"ignoring {older[0].name}: {newer[0].name} is a newer report for {key[0]}@{key[1]}", file=sys.stderr)
+        REPORT_NOTES.append(f"ignoring {older[0].name}: {newer[0].name} is a newer report for the same install")
         best[key] = newer
+    for n in REPORT_NOTES:
+        print(n, file=sys.stderr)
     return [r for _, r in best.values()]
+
+
+REPORT_NOTES = []   # what load_reports skipped or ignored, for the menu bar feed
 
 
 def build_dashboard(rd, out=None):
@@ -1029,8 +1111,12 @@ def build_dashboard(rd, out=None):
     reps = load_reports(rd)
     if not reps:
         raise RuntimeError(f"no reports in {rd} — run `share` first")
-    out = Path(out) if out else Path(rd).parent / "dashboard.html"
-    out.write_text(dashboard.render(reps, VERSION))
+    # each Mac renders its own page from the shared reports: a page every Mac rewrote into the
+    # synced folder every 20 min bred .sync-conflict copies
+    out = Path(out) if out else state_dir() / "dashboard.html"
+    tmp = out.with_suffix(".html.tmp")
+    tmp.write_text(dashboard.render(reps, VERSION))
+    os.replace(tmp, out)
     return out, reps
 
 
@@ -1109,7 +1195,7 @@ def main():
                            help="include project folder names in the shared report (remembered)")
             x.add_argument("--no-projects", dest="projects", action="store_false", help="stop sharing project names (remembered)")
         else:
-            x.add_argument("--out", help="dashboard path (default: <reports>/../dashboard.html)")
+            x.add_argument("--out", help="dashboard path (default: ~/.claude-usage/dashboard.html)")
             x.add_argument("--open", action="store_true", help="open the page after building")
     args = p.parse_args()
     if args.cmd == "report" and args.since == "all":

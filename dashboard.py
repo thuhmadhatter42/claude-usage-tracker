@@ -297,9 +297,10 @@ def render(reps, version):
         stats = [f"<div class=stat><div class=v>{fmt_n(t1)}<small>tokens</small></div><div class=l>today</div></div>",
                  f"<div class=stat><div class=v>${c1:,.0f}</div><div class=l>api-equivalent</div></div>",
                  f"<div class='stat sm'><div class=v>{a.get('calls', 0):,}</div><div class=l>calls</div></div>"]
-        now = dt.datetime.now().astimezone().isoformat(timespec="minutes")
+        now = dt.datetime.now().astimezone()
         for acct, bl in sorted(blk.items()):
-            if bl and bl[-1].get("end", "") > now:                  # only a window that is still open
+            end = when(bl[-1].get("end")) if bl else None
+            if end and end > now:                                  # only a window that is still open
                 tag = f"{acct} · " if len(blk) > 1 else ""
                 stats.append(f"<div class='stat sm' data-k='acct:{html.escape(acct)}'><div class=v>{fmt_n(bl[-1]['tokens'])}</div><div class=l>{html.escape(tag)}5-hour window, since {html.escape(str(bl[-1]['start'])[11:16])}</div></div>")
         if top_model:
@@ -392,6 +393,13 @@ def render(reps, version):
                     f"<td>{fmt_n(mt['output'])}</td><td>{fmt_n(mt['tot'])}</td><td>${mt['cost']:,.0f}</td></tr>")
         tables.append(f"<div class=month><h3>{mdate:%B %Y}</h3><div class=wrap><table><tr><th>day</th>{pcols}<th>input</th><th>cache write</th><th>cache read</th><th>output</th><th>total</th><th>$ api-equiv</th></tr>{''.join(rows)}</table></div></div>")
 
+    # ---- footnote: unpriced calls, only when the shared data actually carries the field ----
+    unpriced_recent = any(a.get("unpriced", 0) > 0 for _, _, r in people for d, a in r["days"].items() if d >= lo30)
+    unpriced_month = sum(a.get("unpriced", 0) for _, _, r in people for d, a in r["days"].items() if d[:7] == tday[:7])
+    note_extra = (f" {unpriced_month} calls this month were on models missing from pricing.json and are counted at $0."
+                  if unpriced_recent else "")
+    note_extra += " Day totals are each person's own local calendar days."
+
     # ---- customize panel ----
     # every label that carries a data-k='acct:…' anywhere on the page, so each one has a checkbox
     accts = sorted({a for _, _, r in people for a in r.get("accounts", [])} | set(plan_labels))
@@ -445,6 +453,6 @@ tick();setInterval(tick,60000);
 <div data-k='sec:charts'><h2>Tokens per day</h2><div class=charts>{''.join(chart_html)}</div></div>
 <div data-k='sec:models'><h2>Models, last 30 days</h2>{model_table}</div>
 <div data-k='sec:days'><h2>Every day</h2><div class=months>{''.join(tables)}</div></div>
-<div class=note data-k='sec:note'>“$ api-equiv” is what the same tokens would cost at Anthropic's pay-as-you-go rates. On a Max plan nobody is billed that; it is the fair scale for splitting the plan. Cache reads are the conversation re-sent on every turn, so they dwarf everything else by design. The channel meters are Claude's own 5-hour and 7-day limits, read from the same place <code>/usage</code> gets them.</div>
+<div class=note data-k='sec:note'>“$ api-equiv” is what the same tokens would cost at Anthropic's pay-as-you-go rates. On a Max plan nobody is billed that; it is the fair scale for splitting the plan. Cache reads are the conversation re-sent on every turn, so they dwarf everything else by design. The channel meters are Claude's own 5-hour and 7-day limits, read from the same place <code>/usage</code> gets them.{html.escape(note_extra)}</div>
 {cfg_html}
 </main><script>{js}</script></body></html>"""
