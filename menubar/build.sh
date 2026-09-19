@@ -3,7 +3,9 @@
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEST="${1:-$HERE/..}"
-APP="$DEST/jusage.app"
+FINAL="$DEST/jusage.app"
+APP="$DEST/.jusage.app.building"
+rm -rf "$APP"
 DEST_ABS="$(cd "$DEST" && pwd -P)"
 VER="$(cat "$HERE/../VERSION")"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -28,4 +30,5 @@ swiftc -O -target "$(uname -m)-apple-macosx13.0" \
   -framework Cocoa -framework SwiftUI -framework ServiceManagement \
   "$HERE/main.swift" -o "$APP/Contents/MacOS/jusage"
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+rm -rf "$FINAL" && mv "$APP" "$FINAL"
 echo "built $APP ($VER)"

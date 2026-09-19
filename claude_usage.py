@@ -241,8 +241,8 @@ def forecast(c, account, meter_name, pct_now, resets_at):
     recent = c.execute("SELECT model, input, cache_5m, cache_1h, cache_read, output FROM records WHERE account=? AND ts>=?",
                        (account, (now - dt.timedelta(hours=24)).isoformat(timespec="seconds"))).fetchall()
     pace = sum(cost_usd(r, rate_for(r["model"], pricing)) or 0 for r in recent) / 24   # $/hour, last day
-    hours = left / pace if pace > 0 else None
-    wall = (now + dt.timedelta(hours=hours)).isoformat(timespec="minutes") if hours is not None else None
+    hours = min(left / pace, 24 * 365) if pace > 0 else None      # capped: a near-idle day would overflow timedelta
+    wall = (now + dt.timedelta(hours=hours)).isoformat(timespec="seconds") if hours is not None else None
     return {"samples": len(log), "ready": True, "per_pct_usd": round(per_pct, 2), "left_usd": round(left, 0),
             "pace_usd_per_hour": round(pace, 2), "hours_to_wall": round(hours, 1) if hours is not None else None, "wall_at": wall}
 
@@ -387,58 +387,107 @@ class LoginError(Exception):
     """No usable claude.ai login for a config dir. The message is what the user should do."""
 
 
-def keychain_services(cdir):
-    """Keychain service names to try for this config dir, in order. Claude Code keeps each config
-    dir's claude.ai login under 'Claude Code-credentials-<sha256(config dir)[:8]>'. For the default
-    ~/.claude some builds (2.1.27x seen) still write the login to the unsuffixed
-    'Claude Code-credentials' item and leave the hashed one holding only mcpOAuth, so for that one
-    dir the unsuffixed item is the fallback when the hashed item has no claudeAiOauth. Never for
-    any other dir: on a Mac with several accounts the unsuffixed item can hold another account."""
+def keychain_candidates(cdir):
+    """Every Keychain service name this config dir's login might sit under, most specific first.
+    Claude Code names the item 'Claude Code-credentials-<sha256(<config dir as it was given>)[:8]>',
+    so the hash depends on the exact spelling of the path: with or without a trailing slash,
+    symlink or real path, $CLAUDE_CONFIG_DIR verbatim. Every spelling is tried. For the default
+    ~/.claude the unsuffixed 'Claude Code-credentials' item is tried last: some builds (2.1.27x seen)
+    keep the default dir's login there and leave the hashed item holding only mcpOAuth."""
     import hashlib
-    names = ["Claude Code-credentials-" + hashlib.sha256(str(cdir).encode()).hexdigest()[:8]]
-    if cdir == HOME / ".claude":
+    cdir = Path(cdir)
+    spellings = [str(cdir), str(cdir.resolve()), str(cdir) + "/", os.path.expanduser("~/" + cdir.name)]
+    env = os.environ.get("CLAUDE_CONFIG_DIR")
+    if env:
+        try:
+            if Path(env).expanduser().resolve() == cdir.resolve():
+                spellings += [env, os.path.expanduser(env), env.rstrip("/")]
+        except OSError:
+            pass
+    names = []
+    for sp in spellings:
+        n = "Claude Code-credentials-" + hashlib.sha256(sp.encode()).hexdigest()[:8]
+        if n not in names:
+            names.append(n)
+    if cdir.resolve() == (HOME / ".claude").resolve():
         names.append("Claude Code-credentials")
     return names
 
 
 def keychain_service(cdir):
-    return keychain_services(cdir)[0]
+    return keychain_candidates(cdir)[0]
 
 
-def read_credentials(cdir):
-    """The credentials JSON Claude Code wrote for this config dir: the Keychain on macOS,
-    <config dir>/.credentials.json elsewhere. Read only, never written. On macOS the hashed item
-    wins; the unsuffixed item is read only for ~/.claude and only when the hashed one has no
-    claudeAiOauth (see keychain_services)."""
+def probe_keychain(cdir):
+    """Read every candidate item. -> list of {service, status, creds, expires_at}; status is one of
+    absent · denied:<security error> · unparsable · no-login (JSON but no claudeAiOauth token) · ok."""
+    import subprocess
+    out = []
+    for svc in keychain_candidates(cdir):
+        row = {"service": svc, "status": "absent", "creds": None, "expires_at": None}
+        try:
+            r = subprocess.run(["security", "find-generic-password", "-s", svc, "-w"],
+                               capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            raise LoginError("the Keychain did not answer in 30 s; a permission dialog is probably waiting on screen (click Always Allow)") from None
+        if r.returncode != 0:
+            err = (r.stderr or "").strip()
+            row["status"] = "absent" if (r.returncode == 44 or "could not be found" in err) else "denied:" + (err or f"security exit {r.returncode}")
+            out.append(row); continue
+        try:
+            creds = json.loads(r.stdout.strip())
+        except json.JSONDecodeError:
+            row["status"] = "unparsable"; out.append(row); continue
+        row["creds"] = creds
+        oauth = (creds.get("claudeAiOauth") or {})
+        if oauth.get("accessToken"):
+            row["status"] = "ok"; row["expires_at"] = float(oauth.get("expiresAt") or 0)
+        else:
+            row["status"] = "no-login"
+        out.append(row)
+    return out
+
+
+def read_credentials(cdir, want_source=False):
+    """The credentials JSON Claude Code wrote for this config dir. macOS: every candidate Keychain
+    item is read and the login expiring furthest in the future wins, so a stale blob in one item
+    never hides a live login in another. Elsewhere: <config dir>/.credentials.json. Read only,
+    never written. Raises LoginError with the real reason (not logged in vs Keychain refused)."""
     if sys.platform == "darwin":
-        import subprocess
-        found = None
-        for svc in keychain_services(cdir):
-            try:
-                r = subprocess.run(["security", "find-generic-password", "-s", svc, "-w"],
-                                   capture_output=True, text=True, timeout=30)
-            except subprocess.TimeoutExpired:
-                raise LoginError("the Keychain did not answer in 30 s; a permission dialog is probably waiting on screen (click Always Allow)") from None
-            if r.returncode != 0:
-                continue
-            try:
-                creds = json.loads(r.stdout.strip())
-            except json.JSONDecodeError:
-                continue
-            if found is None:
-                found = creds
-            if (creds.get("claudeAiOauth") or {}).get("accessToken"):
-                return creds
-        if found is None:
-            raise LoginError("no claude.ai login in the Keychain for this config dir; run `claude /login` there")
-        return found
-    f = cdir / ".credentials.json"
+        rows = probe_keychain(cdir)
+        ok = [r for r in rows if r["status"] == "ok"]
+        if ok:
+            best = max(ok, key=lambda r: r["expires_at"])
+            return (best["creds"], best["service"]) if want_source else best["creds"]
+        denied = [r for r in rows if r["status"].startswith("denied:")]
+        if denied:
+            raise LoginError("the Keychain refused to hand over the login (" + denied[0]["status"][7:] +
+                             "); unlock the Keychain or click Always Allow, then run `jusage doctor`")
+        if any(r["status"] == "no-login" for r in rows):
+            raise LoginError("the Keychain item for this config dir holds no claude.ai login; run `claude /login` there (`jusage doctor` shows what was found)")
+        if any(r["status"] == "unparsable" for r in rows):
+            raise LoginError("the stored login is not valid JSON; run `claude /login` for this config dir")
+        raise LoginError("no claude.ai login in the Keychain for this config dir; run `claude /login` there (`jusage doctor` lists the item names tried)")
+    f = Path(cdir) / ".credentials.json"
     if not f.exists():
-        raise LoginError(f"no claude.ai login ({f} missing); run `claude /login` there")
+        raise LoginError("no claude.ai login (.credentials.json missing in this config dir); run `claude /login` there")
     try:
-        return json.loads(f.read_text())
+        creds = json.loads(f.read_text())
     except json.JSONDecodeError:
         raise LoginError("the stored login is not valid JSON; run `claude /login` for this config dir") from None
+    return (creds, str(f)) if want_source else creds
+
+
+def login_warning(cdir):
+    """A one-line caveat when the login came from the unsuffixed legacy item, which carries no
+    account identity and on a multi-account Mac can belong to another account. None otherwise."""
+    try:
+        _, src = read_credentials(cdir, want_source=True)
+    except LoginError:
+        return None
+    if src == "Claude Code-credentials":
+        return "login read from the legacy Keychain item, which names no account: if these numbers look like another account's, run `claude /login` in this config dir"
+    return None
 
 
 def access_token(cdir):
@@ -582,7 +631,8 @@ def refresh_live(c, force=False, log=print):
         except (LoginError, RuntimeError) as e:
             store[cdir.name] = {"fetched": prev["fetched"] if prev else None, "data": prev["data"] if prev else None, "error": str(e)}
         else:
-            store[cdir.name] = {"fetched": now.isoformat(timespec="seconds"), "data": data, "error": None}
+            store[cdir.name] = {"fetched": now.isoformat(timespec="seconds"), "data": data, "error": None,
+                                "warning": login_warning(cdir)}
             c.executemany("INSERT OR IGNORE INTO meter_log VALUES (?,?,?,?,?)",
                           [(now.isoformat(timespec="seconds"), cdir.name, n, p_, r_) for n, p_, r_ in meters(data)])
             c.commit()
@@ -601,7 +651,7 @@ def live_view(c, store, with_forecast=True):
         ms = meters(v["data"]) if v["data"] else []
         out[acct_label(acct)] = {
             "fetched": v["fetched"], "stale": bool(v["error"] and ms), "error": v["error"],
-            "account": identity_for(acct),
+            "warning": v.get("warning"), "account": identity_for(acct),
             "meters": [{"name": n, "pct": p, "resets_at": r,
                         "forecast": forecast(c, acct, n, p, r) if with_forecast else None} for n, p, r in ms]}
     return out
@@ -618,6 +668,8 @@ def cmd_live(args):
         if entry["error"] and entry["data"]:
             head += f"  STALE reading from {entry['fetched'][11:16]}: {entry['error']}"
         print(head)
+        if entry.get("warning"):
+            print(f"  ⚠ {entry['warning']}")
         if not entry["data"]:
             print(f"  {entry['error']}")
             return
@@ -999,6 +1051,36 @@ def cmd_update(args):
     cmd_scan(args); cmd_live(args); cmd_share(args); args.out = None; cmd_dashboard(args)
 
 
+def cmd_doctor(args):
+    """Per config dir: which Keychain items were tried, what each held, which one is used, and the
+    account .claude.json names. The first thing to run when a meter says STALE or 'no login'."""
+    for cdir in config_dirs():
+        ident = account_identity(cdir)
+        print(f"\n{cdir}  ({ident['email'] if ident else 'no oauthAccount in .claude.json'})")
+        if sys.platform != "darwin":
+            f = cdir / ".credentials.json"
+            print(f"  {f}: {'present' if f.exists() else 'missing'}")
+            continue
+        try:
+            rows = probe_keychain(cdir)
+        except LoginError as e:
+            print(f"  {e}"); continue
+        ok = [r for r in rows if r["status"] == "ok"]
+        chosen = max(ok, key=lambda r: r["expires_at"])["service"] if ok else None
+        now_ms = dt.datetime.now().timestamp() * 1000
+        for r in rows:
+            mark = "→" if r["service"] == chosen else " "
+            exp = ""
+            if r["expires_at"]:
+                left = (r["expires_at"] - now_ms) / 60000
+                exp = f"  expires {'in %.0f min' % left if left > 0 else '%.0f min AGO' % -left}"
+            print(f"  {mark} {r['service']:<36} {r['status']}{exp}")
+        if not chosen:
+            print("  no usable login: run `claude /login` in this config dir")
+        elif chosen == "Claude Code-credentials":
+            print("  ⚠ using the legacy unsuffixed item; it names no account (see README, Keychain)")
+
+
 # ---------- main ----------
 def main():
     p = argparse.ArgumentParser(prog="claude-usage", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1008,6 +1090,7 @@ def main():
     lv = sub.add_parser("live", help="Claude's own 5-hour / 7-day meters for every account on this Mac")
     lv.add_argument("--raw", action="store_true", help="also dump the raw reply")
     lv.add_argument("--force", action="store_true", help="ignore the 15-minute cache")
+    sub.add_parser("doctor", help="per config dir: Keychain items tried, what each held, which is used")
     mj = sub.add_parser("menu-json", help="one JSON blob for the menu bar app (scan + live, quiet)")
     mj.add_argument("--force", action="store_true")
     r = sub.add_parser("report", help="print usage tables")
@@ -1032,7 +1115,7 @@ def main():
     if args.cmd == "report" and args.since == "all":
         args.since = None
     {"scan": cmd_scan, "live": cmd_live, "menu-json": cmd_menu, "report": cmd_report, "share": cmd_share,
-     "dashboard": cmd_dashboard, "update": cmd_update, "set-user": cmd_set_user}[args.cmd](args)
+     "dashboard": cmd_dashboard, "update": cmd_update, "set-user": cmd_set_user, "doctor": cmd_doctor}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -5,3 +5,4 @@ __pycache__/
 jusage.app/
 *.tmp
 *.log
+build.log

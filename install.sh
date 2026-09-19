@@ -110,8 +110,8 @@ if [ -z "$NO_APP" ]; then
     LOG="$(mktemp -t jusage-build)"
     if bash "$DEST/menubar/build.sh" "$DEST" >"$LOG" 2>&1; then
       APP="$DEST/jusage.app"
+      osascript -e 'tell application "jusage" to quit' >/dev/null 2>&1; sleep 1   # always: `open` would just re-activate the old binary
       if [ -w /Applications ]; then
-        osascript -e 'tell application "jusage" to quit' >/dev/null 2>&1; sleep 1
         if ditto "$DEST/jusage.app" /Applications/jusage.app 2>/dev/null; then APP=/Applications/jusage.app; fi
       fi
       ok "menu bar app: $APP"

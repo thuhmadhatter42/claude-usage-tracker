@@ -32,10 +32,14 @@ case "${1:-}" in
   upgrade)
     if [ -d "$DIR/.git" ]; then
       git -C "$DIR" pull --ff-only && echo "jusage $(cat "$DIR/VERSION")"
-      if [ -d "$DIR/menubar" ] && command -v swiftc >/dev/null 2>&1 && bash "$DIR/menubar/build.sh" "$DIR" 2>&1 | tail -1; then
-        if [ -d /Applications/jusage.app ]; then
-          osascript -e 'tell application "jusage" to quit' >/dev/null 2>&1; sleep 1
-          ditto "$DIR/jusage.app" /Applications/jusage.app && open -a /Applications/jusage.app && echo "/Applications/jusage.app updated and reopened"
+      if [ -d "$DIR/menubar" ] && command -v swiftc >/dev/null 2>&1; then
+        if bash "$DIR/menubar/build.sh" "$DIR" >"$DIR/build.log" 2>&1; then
+          if [ -d /Applications/jusage.app ]; then
+            osascript -e 'tell application "jusage" to quit' >/dev/null 2>&1; sleep 1
+            ditto "$DIR/jusage.app" /Applications/jusage.app && open -a /Applications/jusage.app && echo "/Applications/jusage.app updated and reopened"
+          fi
+        else
+          echo "menu bar app build FAILED; the old app is untouched. See $DIR/build.log"
         fi
       fi
     else

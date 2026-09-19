@@ -121,9 +121,13 @@ Read this before pointing it at your own login.
 - **Where the token goes.** Two places, both Anthropic, both HTTPS with certificate checks and
   redirects refused: `api.anthropic.com/api/oauth/usage` (the same endpoint Claude Code's own
   `/usage` uses). Nothing else is contacted.
-- **The Keychain is read, never written.** Only the per-config-dir item Claude Code itself uses
-  (`Claude Code-credentials-<hash>`) is read; the unsuffixed legacy item is ignored because it can
-  hold another account's login. An expired login is reported, never renewed: renewing rotates the
+- **The Keychain is read, never written.** For each config dir jusage reads every item Claude
+  Code might have written the login to (`Claude Code-credentials-<hash>` under each spelling of the
+  path, plus the unsuffixed `Claude Code-credentials` for `~/.claude` only) and uses the login that
+  expires furthest in the future. `jusage doctor` prints exactly which items were tried and which
+  one is in use. The unsuffixed item names no account, so when it is the one in use the meter
+  carries a warning; on a Mac with several accounts, `claude /login` in `~/.claude` clears it.
+  An expired login is reported, never renewed: renewing rotates the
   refresh token behind Claude Code's back, and versions before 0.1.18 that wrote it back truncated
   the Keychain item (`security` caps a secret read from stdin at 128 bytes) and logged the account
   out. Open a Claude Code window on that account and the meter comes back on its own. If you
@@ -150,6 +154,12 @@ Read this before pointing it at your own login.
   every five minutes.
 
 Found something? Open an issue, or for anything sensitive email the address on the GitHub profile.
+
+## Upgrading to 0.1.29
+
+Nothing to do beyond `jusage upgrade`. The login lookup is now exhaustive (every Keychain item
+Claude Code could have used, freshest login wins) and `jusage doctor` shows its work, so a meter
+that says "no login" or STALE has a printable reason instead of a guess.
 
 ## Upgrading to 0.1.28
 
