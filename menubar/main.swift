@@ -221,34 +221,38 @@ final class Model: ObservableObject {
         }
     }
 
-    /// What the menu bar shows. Keys: "today" or "<account>|<meter name>". Remembered across launches.
+    /// What the menu bar shows. Keys: "today" or a meter name ("five_hour", "seven_day", …).
+    /// A meter shows one percentage per shown account, in the panel's order, no labels: "6% 12%".
+    /// Remembered across launches; a pre-0.1.32 "<account>|<meter>" value falls back to its meter.
     @Published var barMode: String = UserDefaults.standard.string(forKey: "barMode") ?? "" {
         didSet { UserDefaults.standard.set(barMode, forKey: "barMode"); (NSApp.delegate as? AppDelegate)?.updateTitle() }
     }
     struct BarChoice: Identifiable { let id: String; let label: String }
-    var barChoices: [BarChoice] {
+    /// Accounts that are switched on, in the order the panel lists them.
+    var shownAccounts: [(String, Live)] {
         guard let f = feed else { return [] }
-        var out: [BarChoice] = []
-        let multi = f.live.count > 1
-        for (acct, lv) in f.live.sorted(by: { $0.key < $1.key }) where shown("acct:" + acct) {
-            for m in (lv.meters ?? []) { out.append(.init(id: "\(acct)|\(m.name)", label: (multi ? "\(acct) · " : "") + meterLabel(m.name))) }
-        }
+        return f.live.sorted(by: { $0.key < $1.key }).filter { shown("acct:" + $0.key) }
+    }
+    var barChoices: [BarChoice] {
+        var seen: [String] = []
+        for (_, lv) in shownAccounts { for m in (lv.meters ?? []) where !seen.contains(m.name) { seen.append(m.name) } }
+        var out = seen.map { BarChoice(id: $0, label: meterLabel($0)) }
         out.append(.init(id: "today", label: "tokens today"))
         return out
     }
-    /// Default: the 5-hour meter of the first account that has one; else today's tokens.
+    /// Default: the 5-hour meter if any account has one; else today's tokens.
     var effectiveBarMode: String {
         let ids = barChoices.map(\.id)
-        if ids.contains(barMode) { return barMode }
-        return ids.first(where: { $0.hasSuffix("|five_hour") }) ?? "today"
+        let wanted = barMode.split(separator: "|", maxSplits: 1).map(String.init).last ?? barMode
+        if ids.contains(wanted) { return wanted }
+        return ids.contains("five_hour") ? "five_hour" : "today"
     }
     var barText: String {
         guard let f = feed else { return "…" }
         let mode = effectiveBarMode
         if mode == "today" { return fmt(f.today.tokens) }
-        let parts = mode.split(separator: "|", maxSplits: 1).map(String.init)
-        if parts.count == 2, let m = f.live[parts[0]]?.meters?.first(where: { $0.name == parts[1] }) { return String(format: "%.0f%%", m.pct) }
-        return fmt(f.today.tokens)
+        let pcts = shownAccounts.compactMap { $0.1.meters?.first(where: { $0.name == mode }) }.map { String(format: "%.0f%%", $0.pct) }
+        return pcts.isEmpty ? fmt(f.today.tokens) : pcts.joined(separator: " ")
     }
 }
 
