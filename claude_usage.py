@@ -25,7 +25,7 @@ DB = STATE / "usage.db"
 CONFIG = STATE / "config.json"
 BLOCK_HOURS = 5
 COLS = ("input", "cache_5m", "cache_1h", "cache_read", "output")
-SCHEMA = 1
+SCHEMA = 2
 RECORD_COLS = ("key", "ts", "day", "account", "model", "project", "session") + COLS
 
 
@@ -158,6 +158,10 @@ def db():
     c.execute("DELETE FROM records WHERE lower(account) LIKE '%.bak%' OR lower(account) LIKE '%backup%' OR lower(account) LIKE '%.old%'")
     # schema version: bump SCHEMA and add an `if v < N:` ALTER block here when a column is added
     v = c.execute("PRAGMA user_version").fetchone()[0]
+    if v < 2:
+        # 0.1.36 re-files worktree agents under their repo: forget every file's signature so the next
+        # scan re-reads them all and rewrites their rows. Runs once, on its own, after an upgrade.
+        c.execute("DELETE FROM files")
     if v < SCHEMA:
         c.execute(f"PRAGMA user_version={SCHEMA}")
     c.commit()
@@ -360,8 +364,8 @@ def scan(c, full=False):
                 continue
             files_read += 1
             rows = list(parse_file(path, account))
-            # --full re-reads every file and rewrites its rows, so a parser fix reaches old records too
-            cur = c.executemany(f"INSERT OR {'REPLACE' if full else 'IGNORE'} INTO records ({','.join(RECORD_COLS)}) VALUES ({','.join('?' * len(RECORD_COLS))})", rows)
+            # a re-read file rewrites its rows, so a parser fix reaches old records too
+            cur = c.executemany(f"INSERT OR REPLACE INTO records ({','.join(RECORD_COLS)}) VALUES ({','.join('?' * len(RECORD_COLS))})", rows)
             new_rows += cur.rowcount if cur.rowcount > 0 else 0
             c.execute("INSERT OR REPLACE INTO files VALUES (?,?,?)", (path, st.st_size, st.st_mtime))
     c.commit()
