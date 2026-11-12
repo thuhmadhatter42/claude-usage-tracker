@@ -289,44 +289,88 @@ enum Alerts {
 
 // MARK: - views
 
-struct ChannelMeter: View {
-    let pct: Double; var th: Theme = Theme(id: "system", def: nil); let segments = 24
+/// Meter maths shared by the bar, the countdown and the menu-bar colour.
+/// period: 5 hours for five_hour, else 7 days. elapsed: 0…1 of the period gone, nil once the reset is due.
+/// projected: % at reset if the recent pace holds — the forecast's own rate when it has one, else straight-line.
+struct Pace {
+    let pct: Double; let elapsed: Double?; let projected: Double?; let wall: Date?; let reset: Date?
+    init(_ m: Meter) {
+        pct = m.pct
+        let period: Double = m.name == "five_hour" ? 5 * 3600 : 7 * 86400
+        reset = m.resets_at.flatMap { ISO8601DateFormatter.minutes.date(from: $0) }
+        let left = reset.map { $0.timeIntervalSinceNow } ?? -1
+        elapsed = left > 0 ? min(max(1 - left / period, 0), 1) : nil
+        wall = m.forecast?.wall_at.flatMap { ISO8601DateFormatter.minutes.date(from: $0) }
+        if left > 0, let f = m.forecast, f.ready, let h = f.hours_to_wall, h > 0 {
+            projected = pct + (100 - pct) / h * (left / 3600)
+        } else if let e = elapsed, e > 0.02 {
+            projected = pct / e
+        } else { projected = nil }
+    }
+    /// The wall lands before the reset: the only case worth a sentence.
+    var wallFirst: Bool { if let w = wall, let r = reset { return w < r } ; return false }
+    enum State { case calm, ahead, wall }
+    var state: State { pct >= 95 || wallFirst || (projected ?? 0) >= 100 ? .wall : (projected ?? 0) >= 80 ? .ahead : .calm }
+}
+func color(_ s: Pace.State, _ th: Theme) -> Color { s == .wall ? th.hot : s == .ahead ? th.warn : th.ok }
+/// Time to the event, departure-board style: "2h 14m", "5d 21h", "due".
+func countdown(_ d: Date?) -> String {
+    guard let d else { return "" }
+    let s = Int(d.timeIntervalSinceNow); if s <= 0 { return "due" }
+    let m = s / 60; if m < 60 { return "\(m)m" }
+    if m < 24 * 60 { return "\(m / 60)h \(String(format: "%02d", m % 60))m" }
+    return "\(m / 1440)d \((m % 1440) / 60)h"
+}
+func clock(_ d: Date) -> String {
+    let f = DateFormatter(); f.dateFormat = Calendar.current.isDateInToday(d) ? "HH:mm" : "EEE HH:mm"; return f.string(from: d)
+}
+
+/// Bullet graph (Stephen Few): solid fill = used, faint fill = where this pace lands by the reset,
+/// thin tick = how much of the period has gone. Fill left of the tick = under pace.
+struct PaceBar: View {
+    let pace: Pace; let th: Theme
     var body: some View {
         GeometryReader { g in
-            let gap: CGFloat = 2
-            let w = (g.size.width - gap * CGFloat(segments - 1)) / CGFloat(segments)
-            HStack(spacing: gap) {
-                ForEach(0..<segments, id: \.self) { i in
-                    let lit = Double(i) < (pct / 100) * Double(segments)
-                    let frac = Double(i + 1) / Double(segments)
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(lit ? (frac > 0.9 ? th.hot : frac > 0.7 ? th.warn : th.ok) : th.line)
-                        .frame(width: w)
+            let w = g.size.width, c = color(pace.state, th)
+            ZStack(alignment: .leading) {
+                Capsule().fill(th.line)
+                if let p = pace.projected, p > pace.pct {
+                    Capsule().fill(c.opacity(0.28)).frame(width: w * min(p, 100) / 100)
+                }
+                Capsule().fill(c).frame(width: max(3, w * min(pace.pct, 100) / 100))
+                if let e = pace.elapsed {
+                    Rectangle().fill(th.ink ?? Color.primary).opacity(0.7).frame(width: 1.5, height: 12).offset(x: w * e - 0.75)
                 }
             }
         }
-        .frame(height: 10)
-        .accessibilityLabel(String(format: "%.0f percent", pct))
+        .frame(height: 6)
+        .accessibilityLabel(String(format: "%.0f percent used", pace.pct))
     }
 }
 
-struct MeterRow: View {
-    let meter: Meter; let tag: String; var th: Theme = Theme(id: "system", def: nil); var forecast = true; var me: String? = nil
+/// One meter, one line: label · bar · % · countdown. A second line only when the wall comes before the reset.
+struct MeterLine: View {
+    let meter: Meter; let th: Theme; var forecast = true
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(String(format: "%.0f%%", meter.pct)).font(.system(.body, design: .default).weight(.semibold).monospacedDigit())
-                Text(tag + meterLabel(meter.name)).foregroundStyle(.secondary).font(.callout)
-                Spacer()
-                Text(resetsText(meter.resets_at)).foregroundStyle(.tertiary).font(.caption).monospacedDigit()
+        let pace = Pace(meter)
+        VStack(alignment: .trailing, spacing: 2) {
+            HStack(spacing: 8) {
+                Text(shortMeter(meter.name)).font(.caption.weight(.medium)).foregroundStyle(.secondary).frame(width: 34, alignment: .leading)
+                PaceBar(pace: pace, th: th)
+                Text(String(format: "%.0f%%", meter.pct)).font(.callout.weight(.semibold)).monospacedDigit()
+                    .foregroundStyle(pace.state == .calm ? (th.ink ?? .primary) : color(pace.state, th)).frame(width: 38, alignment: .trailing)
+                Text(countdown(pace.reset)).font(.caption).monospacedDigit().foregroundStyle(.secondary).frame(width: 48, alignment: .trailing)
+                    .help(pace.reset.map { "resets " + clock($0) } ?? "")
             }
-            ChannelMeter(pct: meter.pct, th: th)
-            let ft = forecast ? forecastText(meter.forecast) : ""
-            if !ft.isEmpty { Text(ft).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
-            let sp = splitText(meter.split, me: me)
-            if !sp.isEmpty { Text(sp).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+            if forecast, pace.wallFirst, let w = pace.wall {
+                Text("runs out \(clock(w)) · resets \(pace.reset.map(clock) ?? "")")
+                    .font(.caption2).monospacedDigit().foregroundStyle(th.hot)
+            }
         }
     }
+}
+func shortMeter(_ n: String) -> String {
+    ["five_hour": "5h", "seven_day": "7d", "seven_day_opus": "7d O", "seven_day_sonnet": "7d S", "seven_day_fable": "7d F"][n] ?? n
 }
 
 /// One line naming the account above its meters, so each row can say just "5 hours" / "7 days".
@@ -335,7 +379,8 @@ struct AccountHeader: View {
     let acct: String; let meters: [Meter]; var th: Theme = Theme(id: "system", def: nil)
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(acct).font(.callout.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+            Text(acct.split(separator: "@").first.map(String.init) ?? acct).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                .help(acct)
             let miss = missingText(meters.first(where: { $0.split?.missing?.isEmpty == false })?.split)
             if !miss.isEmpty { Text(miss).font(.caption).foregroundStyle(th.warn) }
         }
@@ -440,17 +485,63 @@ struct SettingsView: View {
             Divider()
             Text("Show").font(.caption).foregroundStyle(.secondary)
             Toggle("Claude's meters", isOn: model.binding("sec:meters"))
-            Toggle("Room-left forecast under each meter", isOn: model.binding("sec:forecast"))
+            Toggle("Warn when the pace runs out before the reset", isOn: model.binding("sec:forecast"))
             Toggle("Today's totals", isOn: model.binding("sec:today"))
-            Toggle("Current 5-hour window", isOn: model.binding("sec:window"))
-            Toggle("Busiest models", isOn: model.binding("sec:models"))
+                        Toggle("Busiest models", isOn: model.binding("sec:models"))
             Toggle("Busiest projects", isOn: model.binding("sec:projects"))
             Toggle("Other people", isOn: model.binding("sec:people"))
             Divider()
+            if !model.barChoices.isEmpty {
+                Picker("Menu bar shows", selection: Binding(get: { model.effectiveBarMode }, set: { model.barMode = $0 })) {
+                    ForEach(model.barChoices) { Text($0.label).tag($0.id) }
+                }.pickerStyle(.menu)
+            }
             Toggle("Open at login", isOn: $model.atLogin)
-            Text("Settings live on this Mac only. The dashboard has its own Customize button.").font(.caption).foregroundStyle(.tertiary)
+            HStack {
+                Text("Settings live on this Mac only.").font(.caption).foregroundStyle(.tertiary)
+                Spacer()
+                Button("Quit jusage") { NSApp.terminate(nil) }.keyboardShortcut("q").controlSize(.small)
+            }
         }
         .toggleStyle(.checkbox).font(.callout)
+    }
+}
+
+/// One person's spend, one line: "Today 1.4M · $5.13      7d $1,889".
+struct SpendLine: View {
+    let label: String; let today: Tokens; let week: Tokens
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(fmt(today.tokens)).font(.title3.weight(.semibold)).monospacedDigit()
+            Text(money(today.cost)).font(.callout).monospacedDigit().foregroundStyle(.secondary)
+            Spacer()
+            Text("7d").font(.caption).foregroundStyle(.tertiary)
+            Text(money(week.cost)).font(.callout).monospacedDigit().foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// A section that folds: label + chevron, remembered across launches.
+struct Fold<Content: View>: View {
+    @ObservedObject var model: Model; let key: String; let title: String; var trailing: String = ""
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        let open = model.shown("fold:" + key) == false   // folds start closed: "hidden" set holds the open ones
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) { model.binding("fold:" + key).wrappedValue.toggle() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { (NSApp.delegate as? AppDelegate)?.place() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right").font(.caption2.weight(.bold)).rotationEffect(.degrees(open ? 90 : 0))
+                    Text(title).font(.caption.weight(.medium))
+                    Spacer()
+                    Text(trailing).font(.caption).monospacedDigit()
+                }.foregroundStyle(.secondary).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            if open { content().transition(.opacity) }
+        }
     }
 }
 
@@ -459,159 +550,136 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("jusage").font(.headline)
-                if let u = model.feed?.user { Text(u).foregroundStyle(.secondary) }
+            HStack(spacing: 10) {
+                if model.tab != 2, model.feed?.months?.isEmpty == false {
+                    Picker("", selection: $model.tab) { Text("Today").tag(0); Text("Month").tag(1) }
+                        .pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
+                } else { Text("jusage").font(.headline) }
                 Spacer()
-                if let t = model.lastRefresh { Text(t, style: .time).font(.caption).foregroundStyle(.tertiary) }
+                if model.loading { ProgressView().controlSize(.mini) }
+                else if let t = model.lastRefresh { Text(t, style: .time).font(.caption).foregroundStyle(.tertiary) }
                 Button { model.refresh(force: true) } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.borderless).help("Refresh now (⌘R)").keyboardShortcut("r").disabled(model.loading)
-                Button { model.tab = model.tab == 2 ? 0 : 2 } label: { Image(systemName: model.tab == 2 ? "xmark.circle" : "slider.horizontal.3") }
-                    .buttonStyle(.borderless).help("Customize (⌘,)").keyboardShortcut(",")
+                if let d = model.feed?.dashboard {
+                    Button { NSWorkspace.shared.open(URL(fileURLWithPath: d)) } label: { Image(systemName: "chart.bar.xaxis") }
+                        .buttonStyle(.borderless).help("Open dashboard (⌘D)").keyboardShortcut("d")
+                }
+                Button { model.tab = model.tab == 2 ? 0 : 2 } label: { Image(systemName: model.tab == 2 ? "xmark.circle" : "gearshape") }
+                    .buttonStyle(.borderless).help("Settings (⌘,)").keyboardShortcut(",")
             }
-            if model.tab != 2, model.feed?.months?.isEmpty == false {
-                Picker("", selection: $model.tab) { Text("Today").tag(0); Text("Month").tag(1) }
-                    .pickerStyle(.segmented).labelsHidden().controlSize(.small)
-            }
+            .foregroundStyle(.secondary)
 
             if model.tab == 2 {
                 SettingsView(model: model)
             } else if let f = model.feed, model.tab == 1, let months = f.months, !months.isEmpty {
                 MonthView(model: model, months: months)
             } else if let f = model.feed {
-                let th = model.theme
-                let me = f.user ?? "me"
-                // A refresh that failed after a feed exists keeps the numbers on screen: they are the
-                // last good ones and still worth reading. The reason goes above them until one succeeds.
-                if let e = model.error {
-                    Label(e, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(th.warn).lineLimit(3)
-                }
-                if let se = f.share_error {
-                    Label("shared report not updated: " + se, systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(th.warn).lineLimit(3)
-                }
-                // my name at header size, the others below at the same size: one block per person, seen at a glance
-                if model.shown("person:" + me) { Text(me).font(.title3.weight(.bold)) }
-                // meters
-                let lives = f.live.filter { model.shown("acct:" + $0.key) }.sorted { $0.key < $1.key }
-                let anyMeters = lives.contains { !($0.value.meters ?? []).isEmpty }
-                if model.shown("person:" + me), model.shown("sec:meters") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(lives, id: \.key) { acct, lv in
-                            AccountHeader(acct: acct, meters: lv.meters ?? [], th: th)
-                            ForEach(lv.meters ?? []) { MeterRow(meter: $0, tag: "", th: th, forecast: model.shown("sec:forecast"), me: f.user) }
-                            if let e = lv.error {
-                                // meters present + error = the last good reading; say when it is from and why it stopped
-                                let when = (lv.meters ?? []).isEmpty ? "" : "Stale since \((lv.fetched ?? "").dropFirst(11).prefix(5)): "
-                                Label(when + e, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                            }
-                        }
-                        if !anyMeters && lives.isEmpty {
-                            Text("Run `jusage live` once in Terminal to show Claude's own limits here.").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Divider()
-                }
-                // today
-                if model.shown("person:" + me), model.shown("sec:today") {
-                    HStack(alignment: .top, spacing: 22) {
-                        Stat(value: fmt(f.today.tokens), label: "tokens today", big: true)
-                        Stat(value: money(f.today.cost), label: "api-equivalent", big: true)
-                        Stat(value: "\(f.today.calls ?? 0)", label: "calls")
-                    }
-                    if (f.today.unpriced ?? 0) > 0 {
-                        Label("\(f.today.unpriced ?? 0) calls on models not in pricing.json — cost shown without them", systemImage: "exclamationmark.triangle")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                    }
-                    let wins = (f.windows ?? []).filter { $0.open && model.shown("acct:" + $0.account) }
-                    if !wins.isEmpty, model.shown("sec:window") {
-                        HStack(alignment: .top, spacing: 22) {
-                            ForEach(wins) { w in Stat(value: fmt(w.tokens), label: (wins.count > 1 ? "\(w.account) · " : "") + "5-hour window, since \(w.start.suffix(5))") }
-                        }
-                    }
-                    HStack(spacing: 22) {
-                        Stat(value: fmt(f.week.tokens), label: "7 days · \(money(f.week.cost))")
-                        if f.accounts.count > 1 {
-                            ForEach(f.accounts.filter { model.shown("acct:" + $0.key) }.sorted { $0.key < $1.key }, id: \.key) { k, v in Stat(value: fmt(v.tokens), label: k) }
-                        }
-                    }
-                }
-                // everyone else who shares into the same folder
-                let others = (f.people?.elements ?? []).filter { model.shown("person:" + $0.user) }
-                if !others.isEmpty, model.shown("sec:people") {
-                    Divider()
-                    ForEach(others) { p in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(alignment: .firstTextBaseline) {
-                                Text(p.user).font(.title3.weight(.bold))
-                                Text(p.host).font(.caption).foregroundStyle(.tertiary)
-                                Spacer()
-                                let asOf = asOfText(p.updated)
-                                if !asOf.isEmpty { Text(asOf).font(.caption).foregroundStyle(.tertiary) }
-                                if let a = p.age_hours, a > 6 {
-                                    Text("report \(Int(a.rounded())) h old").font(.caption).foregroundStyle(th.warn)
-                                }
-                            }
-                            HStack(spacing: 22) {
-                                Stat(value: fmt(p.today.tokens), label: "today · \(money(p.today.cost))")
-                                Stat(value: fmt(p.week.tokens), label: "7 days · \(money(p.week.cost))")
-                                Stat(value: fmt(p.month.tokens), label: "30 days · \(money(p.month.cost))")
-                            }
-                            if model.shown("sec:meters") {
-                                ForEach(p.live.sorted { $0.key < $1.key }, id: \.key) { acct, lv in
-                                    AccountHeader(acct: acct, meters: lv.meters ?? [], th: th)
-                                    ForEach(lv.meters ?? []) { MeterRow(meter: $0, tag: "", th: th, forecast: model.shown("sec:forecast")) }
-                                }
-                            }
-                        }
-                    }
-                }
-                if !f.models.isEmpty, model.shown("person:" + me), model.shown("sec:models") {
-                    Divider()
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(f.models.prefix(4)) { m in
-                            HStack {
-                                Text(shortModel(m.model)).font(.callout)
-                                Spacer()
-                                Text(fmt(m.tokens)).font(.callout).monospacedDigit().foregroundStyle(.secondary)
-                                Text(money(m.cost)).font(.callout).monospacedDigit().foregroundStyle(.tertiary).frame(width: 52, alignment: .trailing)
-                            }
-                        }
-                    }
-                }
-                if let pj = f.projects, !pj.isEmpty, model.shown("person:" + me), model.shown("sec:projects") {
-                    Divider()
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Busiest projects today").font(.caption).foregroundStyle(.secondary)
-                        ForEach(pj.prefix(6)) { ShareRow(name: $0.project, tokens: $0.tokens, cost: $0.cost, total: f.today.tokens, tint: th.accent) }
-                    }
-                }
+                today(f)
             } else if let e = model.error {
                 Label(e, systemImage: "exclamationmark.triangle").foregroundStyle(.secondary).font(.callout)
             } else {
                 HStack { ProgressView().controlSize(.small); Text("Reading transcripts…").foregroundStyle(.secondary) }
             }
-
-            Divider()
-            if !model.barChoices.isEmpty {
-                Picker("Menu bar shows", selection: Binding(get: { model.effectiveBarMode }, set: { model.barMode = $0 })) {
-                    ForEach(model.barChoices) { Text($0.label).tag($0.id) }
-                }
-                .pickerStyle(.menu).font(.callout).controlSize(.small)
-            }
-            HStack {
-                if let d = model.feed?.dashboard {
-                    Button("Open dashboard") { NSWorkspace.shared.open(URL(fileURLWithPath: d)) }.keyboardShortcut("d")
-                }
-                Spacer()
-                Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut("q")
-            }
-            .controlSize(.small)
         }
         .padding(14)
-        .frame(width: 360)
+        .frame(width: 312)
         .background(model.theme.bg ?? Color.clear)
         .tint(model.theme.accent)
+    }
+
+    @ViewBuilder func today(_ f: Feed) -> some View {
+        let th = model.theme
+        let me = f.user ?? "me"
+        // A failed refresh keeps the last good numbers on screen; the reason sits above them.
+        if let e = model.error {
+            Label(e, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(th.warn).lineLimit(2).help(e)
+        }
+        if let se = f.share_error {
+            Label("shared report not updated: " + se, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(th.warn).lineLimit(2).help(se)
+        }
+        let lives = f.live.filter { model.shown("acct:" + $0.key) }.sorted { $0.key < $1.key }
+        if model.shown("person:" + me), model.shown("sec:meters") {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(lives, id: \.key) { acct, lv in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            AccountHeader(acct: acct, meters: lv.meters ?? [], th: th)
+                            Spacer()
+                            if let e = lv.error {
+                                Text((lv.meters ?? []).isEmpty ? "no reading" : "stale \(String((lv.fetched ?? "").dropFirst(11).prefix(5)))")
+                                    .font(.caption2.weight(.semibold)).foregroundStyle(th.warn).help(e)
+                            }
+                        }
+                        ForEach(lv.meters ?? []) { MeterLine(meter: $0, th: th, forecast: model.shown("sec:forecast")) }
+                            .opacity(lv.error == nil ? 1 : 0.5)
+                    }
+                }
+                if lives.isEmpty {
+                    Text("Run `jusage live` once in Terminal to show Claude's limits here.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        if model.shown("person:" + me), model.shown("sec:today") {
+            Divider()
+            SpendLine(label: "Today", today: f.today, week: f.week)
+            if (f.today.unpriced ?? 0) > 0 {
+                Text("\(f.today.unpriced ?? 0) call\((f.today.unpriced ?? 0) == 1 ? "" : "s") on unpriced models, not in $").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        details(f, me: me, lives: lives)
+    }
+
+    @ViewBuilder func details(_ f: Feed, me: String, lives: [(key: String, value: Live)]) -> some View {
+        let th = model.theme
+        let others = (f.people?.elements ?? []).filter { model.shown("person:" + $0.user) }
+        if !others.isEmpty, model.shown("sec:people") {
+            ForEach(others) { p in
+                let old = (p.age_hours ?? 0) > 24
+                Fold(model: model, key: "person:" + p.user, title: p.user,
+                     trailing: old ? "quiet \(Int(((p.age_hours ?? 0) / 24).rounded())) d" : "\(fmt(p.today.tokens)) · \(money(p.today.cost))") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if old {
+                            Text("Last report \(asOfText(p.updated).replacingOccurrences(of: "as of ", with: "")) from \(p.host). Their app isn't running or is out of date.")
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            SpendLine(label: "Today", today: p.today, week: p.week)
+                            ForEach(p.live.sorted { $0.key < $1.key }, id: \.key) { acct, lv in
+                                AccountHeader(acct: acct, meters: lv.meters ?? [], th: th)
+                                ForEach(lv.meters ?? []) { MeterLine(meter: $0, th: th, forecast: false) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // who used each meter, when more than one person reports into it
+        let splits = lives.flatMap { acct, lv in (lv.meters ?? []).compactMap { m -> (String, String)? in
+            let t = splitText(m.split, me: f.user); return t.isEmpty ? nil : ("\(acct.split(separator: "@").first ?? "") \(shortMeter(m.name))", t.replacingOccurrences(of: "this period: ", with: "")) } }
+        let wins = (f.windows ?? []).filter { $0.open && model.shown("acct:" + $0.account) }
+        if model.shown("person:" + me), !splits.isEmpty || !wins.isEmpty || !f.models.isEmpty {
+            Fold(model: model, key: "detail", title: "Split, window, models") {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(splits, id: \.0) { k, v in
+                        HStack { Text(k).foregroundStyle(.secondary); Spacer(); Text(v).monospacedDigit() }.font(.caption)
+                    }
+                    ForEach(wins) { w in
+                        HStack { Text("5h window since \(w.start.suffix(5))").foregroundStyle(.secondary); Spacer(); Text(fmt(w.tokens)).monospacedDigit() }.font(.caption)
+                    }
+                    if model.shown("sec:models") {
+                        ForEach(f.models.prefix(4)) { m in
+                            HStack { Text(shortModel(m.model)).foregroundStyle(.secondary); Spacer(); Text(fmt(m.tokens)).monospacedDigit(); Text(money(m.cost)).monospacedDigit().foregroundStyle(.tertiary).frame(width: 52, alignment: .trailing) }.font(.caption)
+                        }
+                    }
+                }
+            }
+        }
+        if let pj = f.projects, !pj.isEmpty, model.shown("person:" + me), model.shown("sec:projects") {
+            Fold(model: model, key: "projects", title: "Projects today", trailing: pj.first.map { $0.project } ?? "") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(pj.prefix(5)) { ShareRow(name: $0.project, tokens: $0.tokens, cost: $0.cost, total: f.today.tokens, tint: th.accent) }
+                }
+            }
+        }
     }
 }
 

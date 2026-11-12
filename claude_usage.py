@@ -298,6 +298,15 @@ def to_local(ts):
     return d.astimezone()
 
 
+def project_of(cwd):
+    """Folder name of the session's working dir. An agent in a git worktree runs in
+    <repo>/.claude/worktrees/agent-…: that work belongs to <repo>, not to a throwaway folder."""
+    cwd = cwd or ""
+    if "/.claude/worktrees/" in cwd:
+        cwd = cwd.split("/.claude/worktrees/")[0]
+    return Path(cwd).name or "?"
+
+
 def parse_file(path, account):
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -326,7 +335,7 @@ def parse_file(path, account):
                 c5m = max(total_cc - c1h, 0)
             local = to_local(o["timestamp"])
             yield (key, local.isoformat(timespec="seconds"), local.strftime("%Y-%m-%d"),
-                   account, model, Path(o.get("cwd") or "").name or "?",
+                   account, model, project_of(o.get("cwd")),
                    o.get("sessionId") or "?",
                    u.get("input_tokens") or 0, c5m, c1h,
                    u.get("cache_read_input_tokens") or 0, u.get("output_tokens") or 0)
@@ -351,7 +360,8 @@ def scan(c, full=False):
                 continue
             files_read += 1
             rows = list(parse_file(path, account))
-            cur = c.executemany(f"INSERT OR IGNORE INTO records ({','.join(RECORD_COLS)}) VALUES ({','.join('?' * len(RECORD_COLS))})", rows)
+            # --full re-reads every file and rewrites its rows, so a parser fix reaches old records too
+            cur = c.executemany(f"INSERT OR {'REPLACE' if full else 'IGNORE'} INTO records ({','.join(RECORD_COLS)}) VALUES ({','.join('?' * len(RECORD_COLS))})", rows)
             new_rows += cur.rowcount if cur.rowcount > 0 else 0
             c.execute("INSERT OR REPLACE INTO files VALUES (?,?,?)", (path, st.st_size, st.st_mtime))
     c.commit()
