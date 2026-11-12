@@ -333,13 +333,19 @@ def parse_file(path, account):
 
 
 def scan(c, full=False):
-    """Ingest every changed transcript file. Returns (files read, new rows, total rows)."""
+    """Ingest every changed transcript file. Returns (files read, new rows, total rows, files gone).
+    A path the glob lists but stat can't open (a symlink whose target was deleted or moved, or a file
+    removed mid-scan) is counted as gone and skipped: it has no rows to read."""
     seen = dict(c.execute("SELECT path, size || ':' || mtime FROM files"))
-    new_rows = files_read = 0
+    new_rows = files_read = gone = 0
     for cdir in config_dirs():
         account = dir_key(cdir)
         for path in glob.glob(str(cdir / "projects" / "**" / "*.jsonl"), recursive=True):
-            st = os.stat(path)
+            try:
+                st = os.stat(path)
+            except FileNotFoundError:
+                gone += 1
+                continue
             sig = f"{st.st_size}:{st.st_mtime}"
             if seen.get(path) == sig and not full:
                 continue
@@ -349,13 +355,13 @@ def scan(c, full=False):
             new_rows += cur.rowcount if cur.rowcount > 0 else 0
             c.execute("INSERT OR REPLACE INTO files VALUES (?,?,?)", (path, st.st_size, st.st_mtime))
     c.commit()
-    return files_read, new_rows, c.execute("SELECT count(*) FROM records").fetchone()[0]
+    return files_read, new_rows, c.execute("SELECT count(*) FROM records").fetchone()[0], gone
 
 
 def cmd_scan(args):
-    files_read, new_rows, n = scan(db(), full=args.full)
+    files_read, new_rows, n, gone = scan(db(), full=args.full)
     print(f"scanned {files_read} changed files across {len(config_dirs())} config dir(s); "
-          f"{new_rows} new records, {n} total")
+          f"{new_rows} new records, {n} total" + (f"; skipped {gone} missing (dangling link)" if gone else ""))
 
 
 # ---------- query helpers ----------
