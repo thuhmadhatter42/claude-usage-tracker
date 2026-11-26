@@ -17,6 +17,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundleDisplayName</key><string>jusage</string>
   <key>CFBundleIdentifier</key><string>com.goatdguild.jusage</string>
   <key>CFBundleExecutable</key><string>jusage</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VER</string>
   <key>CFBundleVersion</key><string>$VER</string>
@@ -26,6 +27,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 EOF
+cp "$HERE/icon/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 swiftc -O -target "$(uname -m)-apple-macosx13.0" \
   -framework Cocoa -framework SwiftUI -framework ServiceManagement \
   "$HERE/main.swift" -o "$APP/Contents/MacOS/jusage"
