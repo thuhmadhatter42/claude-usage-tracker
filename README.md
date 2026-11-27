@@ -84,9 +84,10 @@ curl -fsSL https://raw.githubusercontent.com/thuhmadhatter42/claude-usage-tracke
 You can also share later: `jusage share --reports "<synced folder>/claude-usage/reports"`. A
 downloaded copy of the repo can be installed by double-clicking `install.command`.
 
-### From source (macOS 12, or Linux for the command line only)
+### From source (macOS 12, command line only)
 
-The app needs macOS 13. On macOS 12, or on Linux where only the command line and dashboard run:
+The app needs macOS 13. On macOS 12 the installer says so and points here; the command line and the
+dashboard run from a git checkout. `install.sh --from-source ~/jusage` does all of it, or by hand:
 
 ```sh
 git clone https://github.com/thuhmadhatter42/claude-usage-tracker ~/jusage
@@ -126,7 +127,7 @@ jusage menu-json                # the app's feed on stdout (schema 2)
 jusage config get [key]         # also: config read-every <seconds>, config python <path>
 jusage app                      # open the menu bar app
 jusage upgrade                  # app: checks for a signed update; source copy: git pull
-jusage uninstall                # restore status-line commands, then move jusage to the Trash
+jusage uninstall                # restore status-line commands, open at login off, alias removed, then jusage to the Trash
 jusage --version                # also: jusage help
 ```
 
@@ -224,8 +225,9 @@ Read this before pointing it at your own login.
   Code. It reads only the usage endpoint with the token Claude Code already holds, but Anthropic's
   terms for third-party use of subscription logins are theirs to change; run it on your own account
   only.
-- **Install location.** `--from-source` and the app's engine refuse a folder outside your home, or a
-  non-empty folder that holds something else, because the app runs code from there.
+- **Install location.** `install.sh --from-source` refuses a folder outside your home (`..` and
+  symbolic links are resolved first), or a non-empty folder that holds something else, because the
+  `jusage` command runs code from there.
 
 Found something? Open an issue, or for anything sensitive email the address on the GitHub profile.
 

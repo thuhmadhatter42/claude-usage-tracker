@@ -6,8 +6,9 @@ You are installing **jusage**, a local tool that shows my Claude 5-hour and 7-da
 in the menu bar and, if I share, shows the people I split a plan with who used what. Source and
 README: https://github.com/thuhmadhatter42/claude-usage-tracker
 
-It needs macOS 13 or newer and a network connection. On macOS 12 or Linux only the command line runs;
-see "From source" in the README instead of step 2.
+It needs macOS 13 or newer and a network connection. On macOS 12 only the command line runs: add
+`--from-source ~/jusage` to the step 2 command (it keeps a git checkout there, inside the home folder,
+and installs no app; it needs git). The README's "From source" section has the details.
 
 ## 1. Tell me what I am agreeing to, before anything runs
 
@@ -60,8 +61,9 @@ jusage report --since 7d      # a table with numbers, not zeros (if I have used 
 jusage live                   # one line per account: 5-hour and 7-day meters
 ```
 
-(Open a new Terminal window first so the `jusage` command exists; before that the command is
-`jusage` inside the install.)
+(Open a new Terminal window first so the `jusage` alias exists; before that the command is
+`/Applications/jusage.app/Contents/Resources/engine/bin/jusage`, or `<dir>/engine/bin/jusage` for a
+`--from-source <dir>` install.)
 
 - The menu bar shows my meters. Click it. Bright fill is used, dark fill is the forecast at the reset,
   the white line is where being on pace would put me, and grey means the reading is 15 minutes old or
@@ -72,7 +74,8 @@ jusage live                   # one line per account: 5-hour and 7-day meters
 - If `live` reports a login problem for an account, read me the line. The login-error text:
   - "Open Claude Code on this account, then refresh": the login expired. Open a Claude Code window on
     that account once, then run `jusage live` again.
-  - "no claude.ai login found; run `claude /login` in this config folder": that account has no login.
+  - "No claude.ai login found for this account. Run `claude /login` there": that account has no login
+    (`jusage doctor` says the same as "no claude.ai login found; run `claude /login` in this config folder").
   - A Keychain prompt may be waiting on screen: click Always Allow.
   Never try to refresh or rewrite the login yourself. `jusage doctor` prints, per account, which
   Keychain items were tried and which is in use.
@@ -86,5 +89,6 @@ and rewrites the shared report while it runs.
 - `jusage share --reports <folder>` to start sharing later; `jusage set-user <name>` to rename.
 - `jusage statusline on` turns on the status-line backup, only if I ask; `jusage statusline off`
   restores my original status line exactly.
-- `jusage uninstall` restores status-line commands and moves jusage to the Trash.
+- `jusage uninstall` restores status-line commands, switches off open at login, removes the `jusage`
+  alias from `~/.zshrc` / `~/.bashrc` (the original files go to the Trash), then moves jusage to the Trash.
 - Open at login is a checkbox in the app's settings (⌘,). Other keys: ⌘R refresh, ⌘D dashboard, ⌥← / ⌥→ previous / next month.

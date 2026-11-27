@@ -127,6 +127,23 @@ class TestOptions(Installer):
         for opt in ("--reports", "--user", "--projects", "--from-source", "--no-launch", "--help"):
             self.assertIn(opt, out)
 
+    def test_docs_list_exactly_the_installer_options(self):
+        """RULINGS 42/52: README and AGENT-SETUP name the options install.sh takes, and none it dropped."""
+        import re
+        rc, out = self.install("-h")
+        options = set(re.findall(r"(?m)^  (?:-h, )?(--[a-z-]+)", out))
+        self.assertEqual(options, {"--reports", "--user", "--projects", "--from-source", "--no-launch", "--help"})
+        readme = (h.ROOT / "README.md").read_text()
+        table = set(re.findall(r"(?m)^\| `(--[a-z-]+)", readme))
+        self.assertEqual(table, options - {"--help"})
+        for doc in ("README.md", "AGENT-SETUP.md"):
+            text = (h.ROOT / doc).read_text()
+            for gone in ("--dir", "--no-app"):
+                self.assertNotRegex(text, re.escape(gone) + r"\b", f"{doc} still names {gone}")
+        agent = (h.ROOT / "AGENT-SETUP.md").read_text()
+        for opt in ("--user", "--reports", "--projects", "--no-launch", "--from-source"):
+            self.assertIn(opt, agent)
+
     def test_unknown_option(self):
         rc, out = self.install("--dir", "x")
         self.assertEqual(rc, 1)
