@@ -344,6 +344,33 @@ class TestRefresh(RefreshCase):
         self.assertEqual(blk.uuid, "same")
         self.assertEqual(blk.state.data, reply(40))          # freshest wins
 
+    def test_group_reads_through_first_member_with_a_login(self):
+        missing = LoginError("login_missing", "No login")
+        s = Script(self.io, self.state, logins={self.a: missing, self.b: "tb"},
+                   uuids={self.a: ["same"], self.b: ["same"]}, replies={"tb": [reply(40)]})
+        res = gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
+        self.assertEqual(s.fetched_tokens, ["tb"])            # exactly one fetch, through the second
+        self.assertEqual(res.fetched, [self.b])
+        self.assertEqual(len(res.accounts), 1)
+        blk = res.accounts[0]
+        self.assertEqual(blk.key, self.b)
+        self.assertEqual(blk.folders, [self.a, self.b])
+        self.assertEqual(blk.state.data, reply(40))
+        self.assertIsNone(blk.state.error)
+        s.clock[0] = T0 + timedelta(seconds=30)               # inside the cadence: the group is not due
+        res = gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
+        self.assertEqual(s.fetched_tokens, ["tb"])
+
+    def test_group_with_no_login_gets_login_missing(self):
+        missing = LoginError("login_missing", "No login")
+        s = Script(self.io, self.state, logins={self.a: missing, self.b: LoginError("login_missing", "No login b")},
+                   uuids={self.a: ["same"], self.b: ["same"]}, replies={})
+        res = gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
+        self.assertEqual(s.fetched_tokens, [])
+        blk = res.accounts[0]
+        self.assertEqual(blk.state.error, ErrorInfo("login_missing", "No login", T0))
+        self.assertIsNotNone(blk.state.blocked_until)
+
     def test_merge_freshest_wins_when_lead_older(self):
         LiveStore(self.io.store_io()).save(self.state, gate_live({
             self.a: fresh(at=T0 - timedelta(seconds=10)),

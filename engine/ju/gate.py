@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .constants import (BACKOFF_S, JITTER, MANUAL_FLOOR_S, READ_EVERY_MAX, READ_EVERY_MIN, RETRY_AFTER_CAP_S)
-from .contracts import (ERROR_KINDS, GateDecision, JusageError, Login, Meter, RateLimited, Reading)
+from .contracts import (ERROR_KINDS, GateDecision, JusageError, Login, LoginError, Meter, RateLimited, Reading)
 from .live_store import AccountLive, ErrorInfo, Live, LiveStore, log_meters
 from .timeutil import minute_of_week
 
@@ -64,7 +64,7 @@ class GateDeps:
 @dataclass(frozen=True)
 class AccountBlock:
     """One claude.ai account: folders sharing a uuid merged, the freshest reading kept (R-15)."""
-    key: str                      # the lead folder (first in the caller's order)
+    key: str                      # the member holding the group's state (see _current_key)
     folders: List[str]
     uuid: Optional[str]
     state: AccountLive
@@ -175,39 +175,63 @@ def _refresh_locked(state: Path, accounts: List[str], manual: bool, deps: GateDe
     fetched: List[str] = []
     conn = None
     try:
-        for lead, members, uuid in groups:
-            acc = live.account(lead)
+        for _, members, _ in groups:
+            cur = _current_key(live, members)
+            acc = live.account(cur)
             now = deps.now()
             if not due(acc, deps.read_every_s, now, manual, _meters(acc, deps)).due:
                 continue
-            others = {g[0]: live.account(g[0]).reset_anchor["minute_of_week"] for g in groups
-                      if g[0] != lead and live.account(g[0]).reset_anchor["minute_of_week"] is not None}
+            others = {}
+            for _, other, _ in groups:
+                if other is not members:
+                    ok = _current_key(live, other)
+                    if live.account(ok).reset_anchor["minute_of_week"] is not None:
+                        others[ok] = live.account(ok).reset_anchor["minute_of_week"]
             if manual:
                 acc = replace(acc, last_manual=now)
-            acc, reading = _read_one(lead, acc, others, now, deps)
-            live.put(lead, acc)
-            fetched.append(lead)
+            reader, acc, reading = _read_group(members, acc, others, now, deps)
+            key = reader if reader is not None else cur
+            live.put(key, acc)
+            if reader is not None:
+                fetched.append(reader)
             if reading is not None:
                 if conn is None:
                     conn = deps.open_db(state)
-                log_meters(conn, lead, reading)
+                log_meters(conn, reader, reading)
         if fetched:
             deps.store.save(state, live)
     finally:
         if conn is not None:
             conn.close()
-    blocks = [AccountBlock(lead, members, uuid, _freshest([live.account(m) for m in members]))
-              for lead, members, uuid in groups]
+    blocks = []
+    for _, members, uuid in groups:
+        cur = _current_key(live, members)
+        blocks.append(AccountBlock(cur, members, uuid, live.account(cur)))
     return RefreshResult(live=live, accounts=blocks, fetched=fetched,
                          next_due=_next_due(live, groups, deps))
 
 
-def _read_one(folder: str, acc: AccountLive, others: Dict[str, int], now: datetime,
-              deps: GateDeps) -> Tuple[AccountLive, Optional[Reading]]:
-    """find_login → uuid before → fetch → parse → uuid after → fingerprint. Returns the updated
-    entry and the accepted reading (None when anything refused it)."""
+def _read_group(members: List[str], acc: AccountLive, others: Dict[str, int], now: datetime,
+                deps: GateDeps) -> Tuple[Optional[str], AccountLive, Optional[Reading]]:
+    """The group's reader is the first member, in order, whose find_login succeeds; then uuid
+    before → fetch → parse → uuid after → fingerprint. Returns (reader or None when no member has
+    a login, the updated entry, the accepted reading or None). No login anywhere → the first
+    member's LoginError is the group's error."""
+    first_err: Optional[LoginError] = None
+    folder = login = None
+    for m in members:
+        try:
+            login = deps.find_login(m)
+        except LoginError as e:
+            first_err = first_err or e
+            continue
+        folder = m
+        break
+    if folder is None:
+        deps.log("warn", "no member of the account has a usable login", folders=members, kind=first_err.kind)
+        return None, on_failure(acc, first_err.kind, first_err.text, now, deps.rand), None
+    reader = folder
     try:
-        login = deps.find_login(folder)
         before = deps.read_uuid(folder)
         reply = deps.fetch(login.token)
         parsed = deps.parse(reply)
@@ -220,24 +244,24 @@ def _read_one(folder: str, acc: AccountLive, others: Dict[str, int], now: dateti
             if verdict == "reject_foreign":
                 deps.log("warn", "reading rejected: weekly reset matches another account", folder=folder,
                          minute_of_week=minute_of_week(weekly))
-                return on_failure(replace(acc, reset_anchor=anchor), "identity_foreign_reset",
-                                  "This reading matches another account's reset", now, deps.rand), None
+                return reader, on_failure(replace(acc, reset_anchor=anchor), "identity_foreign_reset",
+                                          "This reading matches another account's reset", now, deps.rand), None
             if verdict != "accept":
                 raise ValueError(f"fingerprint verdict {verdict!r}")
     except RateLimited as e:
         deps.log("warn", "usage read rate-limited", folder=folder, retry_after=e.retry_after_s)
-        return on_429(acc, e.retry_after_s, now, deps.rand), None
+        return reader, on_429(acc, e.retry_after_s, now, deps.rand), None
     except JusageError as e:
         deps.log("warn", "usage read failed", folder=folder, kind=e.kind)
         text = IDENTITY_CHANGED_TEXT if e.kind == "identity_changed" else getattr(e, "text", None) or str(e)
-        return on_failure(acc, e.kind, text, now, deps.rand), None
+        return reader, on_failure(acc, e.kind, text, now, deps.rand), None
     new = on_success(acc, data=reply, uuid=after, warning=deps.login_warning(login), anchor=anchor, now=now)
-    return new, Reading(folder=folder, fetched=now, meters=list(parsed.meters), flags=list(parsed.flags),
+    return reader, new, Reading(folder=folder, fetched=now, meters=list(parsed.meters), flags=list(parsed.flags),
                         uuid=after, source="service")
 
 
 def _group(accounts: List[str], uuids: Dict[str, Optional[str]]) -> List[Tuple[str, List[str], Optional[str]]]:
-    """Folders sharing a uuid → one group led by the first in order; no uuid → its own group."""
+    """Folders sharing a uuid → one group, members in the caller's order; no uuid → its own group."""
     groups: List[Tuple[str, List[str], Optional[str]]] = []
     by_uuid: Dict[str, List[str]] = {}
     for k in accounts:
@@ -252,9 +276,15 @@ def _group(accounts: List[str], uuids: Dict[str, Optional[str]]) -> List[Tuple[s
     return groups
 
 
-def _freshest(entries: List[AccountLive]) -> AccountLive:
-    with_data = [e for e in entries if e.data is not None and e.fetched is not None]
-    return max(with_data, key=lambda e: e.fetched) if with_data else entries[0]
+def _current_key(live: Live, members: List[str]) -> str:
+    """The member holding the group's gate state: the one the gate touched last (latest success or
+    failure). A success is stored on the reader and a failure on the current member, so this is
+    also the member with the freshest reading. Never touched → the first member."""
+    def touched(k):
+        a = live.account(k)
+        return max((t for t in (a.fetched, a.error.at if a.error else None) if t is not None), default=None)
+    seen = [(touched(k), i, k) for i, k in enumerate(members) if touched(k) is not None]
+    return max(seen, key=lambda x: (x[0], -x[1]))[2] if seen else members[0]
 
 
 def _meters(acc: AccountLive, deps: GateDeps) -> List[Meter]:
@@ -267,8 +297,8 @@ def _next_due(live: Live, groups, deps: GateDeps) -> datetime:
     if not groups:
         return now + timedelta(seconds=deps.read_every_s)
     times = []
-    for lead, _, _ in groups:
-        acc = live.account(lead)
+    for _, members, _ in groups:
+        acc = live.account(_current_key(live, members))
         d = due(acc, deps.read_every_s, now, False, _meters(acc, deps))
         times.append(now if d.due else d.next_at)
     return min(times)
