@@ -94,16 +94,21 @@ class ReportIdTests(FolderCase):
         self.assertEqual(host, socket.gethostname().split(".")[0])
         self.assertEqual(name, f"Sam@{host}-a1b2.json")
 
-    def test_no_user_refused(self):
+    def test_no_user_set_uses_the_installers_default(self):
+        """No name set and no $USER (the app runs the engine with HOME and LANG only): the report still has
+        a name, the installer's default (config.user_name), never a refusal that stops sharing."""
+        import pwd
         with ConfigStore.edit(self.home.state) as c:
             c.install_id = "a1b2"
         old = os.environ.pop("USER", None)
         try:
-            with self.assertRaises(ConfigError):
-                share.report_id(ConfigStore.load(self.home.state))
+            user, _, name = share.report_id(ConfigStore.load(self.home.state))
         finally:
             if old is not None:
                 os.environ["USER"] = old
+        pw = pwd.getpwuid(os.getuid())
+        self.assertEqual(user, (pw.pw_gecos.split() or [pw.pw_name])[0])
+        self.assertTrue(name.startswith(user + "@") and name.endswith("-a1b2.json"))
 
     def test_user_with_slash_refused(self):
         with self.assertRaises(ConfigError):

@@ -219,5 +219,25 @@ class ConfigTests(unittest.TestCase):
             config.reports_dir(cfg, str(f), create=True)
 
 
+class UserName(unittest.TestCase):
+    def test_default_is_the_first_word_of_the_full_name(self):
+        """The feed's `me.user` and the report's name are never empty: with no name set, the same default the
+        installer uses (first word of this Mac account's full name, else the account name). The app refuses a
+        feed whose me.user is not a string, so an unset name must never reach it as null."""
+        import pwd
+        from ju import config
+        h = support.temp_home()
+        self.addCleanup(h.cleanup)
+        with config.ConfigStore.edit(h.state):
+            pass
+        cfg = config.ConfigStore.load(h.state)
+        pw = pwd.getpwuid(os.getuid())
+        want = (pw.pw_gecos.split() or [pw.pw_name])[0]
+        self.assertEqual(config.user_name(cfg), want)
+        with config.ConfigStore.edit(h.state) as c:
+            c.user = "Sam"
+        self.assertEqual(config.user_name(config.ConfigStore.load(h.state)), "Sam")
+
+
 if __name__ == "__main__":
     unittest.main()

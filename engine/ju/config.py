@@ -212,6 +212,16 @@ def install_id(cfg: Config) -> str:
     return cfg.install_id
 
 
+def user_name(cfg: Config) -> str:
+    """Your name in shared reports and the feed's `me.user`: the one set (set-user / --user), else the
+    installer's default, the first word of this Mac account's full name, else the account name."""
+    if cfg.user:
+        return cfg.user
+    import pwd
+    pw = pwd.getpwuid(os.getuid())
+    return (pw.pw_gecos.split() or [pw.pw_name])[0]
+
+
 def set_read_every(cfg: Config, seconds) -> None:
     """Refuses anything but a whole number of seconds from 15 to 600."""
     problem = _check_read_every(seconds)

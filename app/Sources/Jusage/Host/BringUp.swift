@@ -27,6 +27,24 @@ struct Refusal: Error, Equatable {
     let line: String
 }
 
+/// A refusal or a failed run is never silent (SCORE §3): one HostLog line and the panel's one plain line (the
+/// model's `runError`); the host then runs no engine. The host's only path for both.
+@MainActor
+enum HostFailure {
+    static func refuse(_ r: Refusal, log: HostLog, model: AppModel, now: Date = Date()) {
+        log.error("bringup", r.line)
+        model.apply(.failed(line: r.line, exit: 2), now: now)
+    }
+
+    /// After `model.apply(run)`: true for a good feed; otherwise the failure (including a feed the app refused
+    /// to decode, e.g. a wrong schema) is logged once, here (RULINGS 48d).
+    static func ranOK(_ r: RunResult, model: AppModel, log: HostLog) -> Bool {
+        if case .ok = r, model.runError == nil, model.feed != nil { return true }
+        log.error("engine", "run failed: \(model.runError ?? AppModel.failureText(r) ?? "no reason given")")
+        return false
+    }
+}
+
 /// How bring-up asks about a Python. The app uses `SystemPython`; tests use a fake.
 protocol PythonChecking {
     func exists(_ path: String) -> Bool

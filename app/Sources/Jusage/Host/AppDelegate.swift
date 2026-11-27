@@ -104,8 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refuse(_ r: Refusal) {
         refusal = r
-        log.error("bringup", r.line)
-        model.apply(.failed(line: r.line, exit: 2), now: Date())
+        HostFailure.refuse(r, log: log, model: model)
     }
 
     /// The `jusage` command runs the same Python as the app (SCORE §1.5): the engine's `config python`.
@@ -126,11 +125,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let now = Date()
             model.apply(r, now: now)
             var nextDue: Date? = nil
-            if case .ok = r, model.runError == nil, let feed = model.feed {
+            if HostFailure.ranOK(r, model: model, log: log), let feed = model.feed {
                 nextDue = feed.nextDue
                 afterGoodFeed(feed, now: now)
-            } else {
-                log.error("engine", "run failed: \(model.runError ?? Self.describe(r))")
             }
             done(nextDue)
         }
@@ -222,14 +219,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// For the log: the one failure text (AppModel, RULINGS 48e) plus the exit code where there is one.
     private static func describe(_ r: RunResult) -> String {
-        switch r {
-        case .ok: return "ok"
-        case .failed(let line, let code): return "\(line) (exit \(code))"
-        case .timedOut: return FeedRunner.timeoutText
-        case .crashed(let s): return "the engine stopped unexpectedly (signal \(s))"
-        case .launchFailed(let why): return "the engine could not start: \(why)"
-        }
+        guard let text = AppModel.failureText(r) else { return "ok" }
+        if case .failed(_, let code) = r { return "\(text) (exit \(code))" }
+        return text
     }
 }
 

@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, FrozenSet, List, Optional, Sequence
 
-from ju import accounts, formats, fsutil, ledger_query, pace as pace_mod, session_share as share_mod, timeutil, usage_client
+from ju import accounts, config, formats, fsutil, ledger_query, pace as pace_mod, session_share as share_mod, timeutil, usage_client
 from ju.constants import FEED_SCHEMA, RED_AT, SESSION_S, STALE_AFTER_S, WARMUP_E, WEEK_S
 from ju.contracts import Meter, Reading
 from ju.gate import AccountBlock, RefreshResult
@@ -338,7 +338,7 @@ def build_feed(*, cfg, refresh: RefreshResult, conn, pricing, now: datetime, ver
     return {
         "schema": FEED_SCHEMA, "version": version, "generated": _iso(now), "next_due": _iso(refresh.next_due),
         "rules": rules(cfg),
-        "me": {"user": cfg.user, "install_id": cfg.install_id},
+        "me": {"user": config.user_name(cfg), "install_id": cfg.install_id},
         "accounts": account_blocks(cfg=cfg, refresh=refresh, conn=conn, now=now,
                                    views=seen, split_view=split_view),
         "totals": {"as_of": _iso(now),

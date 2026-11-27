@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import re
 import socket
 from dataclasses import dataclass, field
@@ -25,7 +24,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ju import accounts as accounts_mod
 from ju import fsutil, ledger_query, timeutil
-from ju.config import Config, ConfigError, install_id as config_install_id
+from ju.config import Config, ConfigError, install_id as config_install_id, user_name as config_user_name
 from ju.constants import COLS, REPO_ROOT, REPORT_VERSION, SHARE_MIN_INTERVAL_S, STALE_AFTER_S
 from ju.timeutil import parse_iso
 
@@ -58,9 +57,7 @@ def version_tuple(s) -> Tuple[int, ...]:
 def report_id(cfg: Config) -> Tuple[str, str, str]:
     """(your name, this Mac's short host name, the file name). One function, so the writer and the
     feed's `share` block can never disagree about the name."""
-    user = cfg.user or os.environ.get("USER")
-    if not user:
-        raise ConfigError("No user name is set; run `config user <name>`")
+    user = config_user_name(cfg)
     host = socket.gethostname().split(".")[0]
     if not host:
         raise ConfigError("This Mac has no host name")
