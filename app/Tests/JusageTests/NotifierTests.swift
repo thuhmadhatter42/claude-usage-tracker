@@ -1,4 +1,5 @@
 import XCTest
+import UserNotifications
 @testable import Jusage
 
 /// S14: permission at launch, posts S8's notes under a stable id so a repeat replaces (R-90, R-93).
@@ -58,5 +59,24 @@ final class NotifierTests: XCTestCase {
         let log = RecordingLog()
         Notifier(center: c, log: log).post([note()])
         XCTAssertEqual(log.errors, ["[notify] could not post /h/.claude-session-warn80: denied"])
+    }
+
+    func testPostReportsOnlyTheIdsActuallyDelivered() {
+        let ok = FakeCenter()
+        var got: [String]?
+        Notifier(center: ok, log: RecordingLog()).post([note(), note(.critical)]) { got = $0 }
+        XCTAssertEqual(Set(got ?? []), ["/h/.claude-session-warn80", "/h/.claude-session-critical"])
+        let bad = FakeCenter(); bad.postError = "denied"
+        var none: [String]?
+        Notifier(center: bad, log: RecordingLog()).post([note()]) { none = $0 }
+        XCTAssertEqual(none, [])
+    }
+
+    func testAlertsShowWhileJusageIsTheActiveApp() {
+        // willPresent must ask for a banner and sound, or macOS drops the alert while jusage is frontmost.
+        XCTAssertEqual(NotificationPresenter.options, [.banner, .sound])
+        var asked: UNNotificationPresentationOptions?
+        NotificationPresenter.present { asked = $0 }
+        XCTAssertEqual(asked, [.banner, .sound])
     }
 }

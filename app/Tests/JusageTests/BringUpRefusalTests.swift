@@ -62,6 +62,19 @@ final class BringUpRefusalTests: XCTestCase {
         XCTAssertEqual(line, "jusage: the recorded Python /usr/local/bin/python3 is gone. Run install.sh again, or open jusage with --set-python <path>.")
     }
 
+    func testDamagedSettingsRefuseAndKeepTheRecord() throws {
+        let d = UserDefaults(suiteName: "jusage-refusal-\(UUID().uuidString)")!
+        let damaged = Data(#"{"menuBarMode":"meter:","pythonPath":"/opt/homebrew/bin/python3"}"#.utf8)
+        d.set(damaged, forKey: SettingsStore.key)
+        let line = try XCTUnwrap(refused(try FakeAppBundle.make(in: temp), settings: SettingsStore(defaults: d)))
+        XCTAssertTrue(line.contains("settings"), line)
+        XCTAssertTrue(line.contains(SettingsStore.corruptKeyPrefix), "names where the copy is: \(line)")
+        XCTAssertEqual(d.data(forKey: SettingsStore.key), damaged)
+        XCTAssertNotNil(BringUp.setPython("/opt/homebrew/bin/python3", settings: SettingsStore(defaults: d), python: goodPython()),
+                        "--set-python refuses too, it would overwrite the record")
+        XCTAssertEqual(d.data(forKey: SettingsStore.key), damaged)
+    }
+
     func testBadThemesRefuse() throws {
         let line = try XCTUnwrap(refused(try FakeAppBundle.make(in: temp, themes: #"{"order": ["nope"], "themes": {}}"#)))
         XCTAssertTrue(line.contains("themes.json") || line.contains("nope"), line)

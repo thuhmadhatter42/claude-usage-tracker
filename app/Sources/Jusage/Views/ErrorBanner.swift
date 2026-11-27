@@ -20,6 +20,8 @@ enum BannerText {
         return "\(label): \(sentence)"
     }
 
+    static let engineTextKinds: Set<String> = ["identity_foreign_reset"]
+
     static let shareFailed = "Shared report not updated."
 
     static func banners(feed: Feed?, runError: String?, settings: AppSettings, time: DisplayTime) -> [Banner] {
@@ -28,8 +30,10 @@ enum BannerText {
         guard let feed else { return out }
         for a in TodayModel.accounts(feed: feed, settings: settings) {
             guard let e = a.error else { continue }
-            let label = AccountBlockModel.localPart(a.email)
-            let text = Staleness.reasons[e.kind] == nil
+            let label = a.label
+            // The engine's own text carries the specifics for kinds that name something (the other account's
+            // label for identity_foreign_reset); the fixed sentence would drop it.
+            let text = Staleness.reasons[e.kind] == nil || Self.engineTextKinds.contains(e.kind)
                 ? "\(label): \(e.text)"
                 : line(kind: e.kind, until: e.until, label: label, time: time)
             out.append(Banner(id: a.key, text: text, hover: e.text))

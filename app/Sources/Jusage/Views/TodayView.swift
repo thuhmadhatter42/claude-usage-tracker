@@ -42,7 +42,7 @@ struct TodayView: View {
                 PeopleFolds(folds: PeopleModel.make(feed: feed, settings: settings, time: time),
                             settings: settings, palette: palette, setFold: setFold)
             }
-            if settings.isSectionShown(.models) {
+            if DetailModel.isShown(feed: feed, settings: settings, time: time) {
                 SplitFold(feed: feed, settings: settings, time: time, palette: palette, setFold: setFold)
             }
             if settings.isSectionShown(.projects) && !feed.projectsToday.isEmpty {

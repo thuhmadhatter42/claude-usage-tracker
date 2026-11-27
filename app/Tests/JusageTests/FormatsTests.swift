@@ -38,7 +38,7 @@ final class FormatsTests: XCTestCase {
         let f = try Fixture.feed()
         let m = f.accounts[0].meters[0]    // resets 00:10 next day
         XCTAssertEqual(Fmt.resetText(meter: m, now: Fixture.now), "2h 30m")
-        let after = m.resetsAt.addingTimeInterval(5)
+        let after = m.resetsAt!.addingTimeInterval(5)
         XCTAssertEqual(Fmt.resetText(meter: m, now: after), "Reset due, waiting for a fresh reading")
     }
 

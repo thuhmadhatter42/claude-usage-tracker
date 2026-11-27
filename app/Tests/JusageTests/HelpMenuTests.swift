@@ -67,14 +67,31 @@ final class HelpMenuTests: XCTestCase {
         XCTAssertEqual(after.first { $0.name == "Log" }?.result.state, .ok)
     }
 
-    func testAnAppCheckRunsWithTheStandardOnes() {
+    func testAnAppCheckRunsWithTheStandardOnes() async {
         let c = DoctorCenter()
-        c.run([DoctorCheck(name: "Helper tool") { .init(state: .fail, detail: "ffmpeg is missing.") },
-               DoctorCheck(name: "Server") { .init(state: .ok, detail: "Reachable.") }])
+        await c.run([DoctorCheck(name: "Helper tool") { .init(state: .fail, detail: "ffmpeg is missing.") },
+               DoctorCheck(name: "Server") { .init(state: .ok, detail: "Reachable.") }]).value
         XCTAssertTrue(c.showing)
         XCTAssertEqual(c.lines.map(\.name), ["Helper tool", "Server"])
         XCTAssertEqual(c.failures, 1)
         render(DoctorSheet(center: c))
+    }
+
+    /// A slow check (the engine's doctor waits up to 30 s on a Keychain prompt) must not freeze the main thread:
+    /// `run` returns at once with the sheet up and "running", and the answers arrive afterwards.
+    func testASlowCheckDoesNotBlockTheMainThread() async {
+        let gate = DispatchSemaphore(value: 0)
+        let c = DoctorCenter()
+        let started = Date()
+        let task = c.run([DoctorCheck(name: "Slow") { gate.wait(); return .init(state: .ok, detail: "late") }])
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.0, "run returned without waiting for the check")
+        XCTAssertTrue(c.showing)
+        XCTAssertTrue(c.running)
+        XCTAssertEqual(c.lines, [])
+        gate.signal()
+        await task.value
+        XCTAssertFalse(c.running)
+        XCTAssertEqual(c.lines.map(\.name), ["Slow"])
     }
 
     /// Lay the view out in an off-screen hosting view (no window): its body really runs.

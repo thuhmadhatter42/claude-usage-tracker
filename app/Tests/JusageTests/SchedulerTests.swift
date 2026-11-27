@@ -93,6 +93,32 @@ final class SchedulerTests: XCTestCase {
         XCTAssertEqual(runs.forced, [false, false], "the wake run starts now, not forced")
     }
 
+    /// Review 13: at wake the overdue timer and the wake notification both ask; the second must not queue
+    /// another run behind the first.
+    func testWakeRightAfterARunStartedDoesNotRunTwice() {
+        scheduler.start()
+        runs.finish(nextDue: now.addingTimeInterval(60))
+        advance(9 * 3600)
+        fireTimer()                                  // the overdue timer starts the run
+        XCTAssertEqual(runs.forced.count, 2)
+        advance(1)
+        scheduler.request(.wake)                     // the wake notification, a second later
+        XCTAssertEqual(ticks.last, now, "staleness is still re-checked")
+        runs.finish(nextDue: now.addingTimeInterval(60))
+        XCTAssertEqual(runs.forced.count, 2, "no follow-up run")
+        advance(30)
+        scheduler.request(.wake)
+        XCTAssertEqual(runs.forced.count, 3, "a later wake still runs")
+    }
+
+    /// Review 13: a settings write re-reads the feed but never forces a fetch from Anthropic.
+    func testSettingsChangedRunsNotForced() {
+        scheduler.start()
+        runs.finish(nextDue: now.addingTimeInterval(60))
+        scheduler.request(.settingsChanged)
+        XCTAssertEqual(runs.forced, [false, false])
+    }
+
     // MARK: more of S10
 
     func testEveryTickReevaluatesStaleness() {

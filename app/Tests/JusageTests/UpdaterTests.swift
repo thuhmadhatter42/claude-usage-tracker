@@ -11,6 +11,25 @@ final class UpdaterTests: XCTestCase {
         u.checkForUpdates()                  // a no-op, logged
     }
 
+    private func bundle(id: String, automatic: Bool?) throws -> Bundle {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("upd-\(UUID().uuidString).app")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        var plist: [String: Any] = ["CFBundleIdentifier": id]
+        if let automatic { plist["SUEnableAutomaticChecks"] = automatic }
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: dir.appendingPathComponent("Contents/Info.plist"))
+        return try XCTUnwrap(Bundle(url: dir))
+    }
+
+    /// Review 14: a dev build must never offer to replace itself with the release.
+    func testDevBuildsSkipTheLaunchCheck() throws {
+        XCTAssertFalse(AppUpdater.launchCheckAllowed(bundle: try bundle(id: "com.example.jusage.dev", automatic: true)))
+        XCTAssertFalse(AppUpdater.launchCheckAllowed(bundle: try bundle(id: "com.example.jusage", automatic: false)),
+                       "automatic checks off in the plist also means no launch check")
+        XCTAssertTrue(AppUpdater.launchCheckAllowed(bundle: try bundle(id: "com.example.jusage", automatic: true)))
+        XCTAssertTrue(AppUpdater.launchCheckAllowed(bundle: try bundle(id: "com.example.jusage", automatic: nil)))
+    }
+
     /// The shipped app must carry the four Sparkle keys. Runs against the built app when APP_INFO_PLIST points at it
     /// (the release script sets it); skipped in a plain unit-test run.
     func testTheBuiltAppCarriesTheSparkleKeys() throws {

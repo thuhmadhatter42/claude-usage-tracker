@@ -47,29 +47,38 @@ enum TitleModel {
         let tag: String? = settings.menuBarLabels ? (settings.menuBarTags[a.key] ?? String(a.number)) : nil
         guard let m = a.meters.first(where: { $0.id == meterId }) else {
             return TitleItem(text: missing, tag: tag, colour: nil, stale: false,
-                             hover: "\(a.email)\nNo \(meterId) reading for this account.")
+                             hover: "\(a.identity)\nNo \(meterId) reading for this account.")
         }
         let fresh = feed.freshness(of: m, in: a, now: now)
         let stale = fresh.isStale
 
         var colour: PaceState? = nil
+        var colourFrom: Feed.Meter? = nil
         if !stale {
             if settings.colourByWorstMeter {
                 // Worst of this account's meters that are fresh and carry a colour (stale ones never count).
-                colour = a.meters
+                let worst = a.meters
                     .filter { !feed.freshness(of: $0, in: a, now: now).isStale }
-                    .compactMap { $0.pace.state }
-                    .max()
+                    .compactMap { meter in meter.pace.state.map { (meter, $0) } }
+                    .max { $0.1 < $1.1 }
+                colour = worst?.1
+                if let w = worst?.0, w.id != m.id { colourFrom = w }
             } else {
                 colour = m.pace.state
             }
         }
 
-        var lines = [a.email]
-        lines.append("\(m.name) \(pctText(m.pct)) · resets \(Fmt.clock(m.resetsAt, now: now, hour12: hour12, timeZone: timeZone)) · \(m.source) · read \(Fmt.age(now.timeIntervalSince(m.readAt)))")
+        var lines = [a.identity]
+        let resets = m.resetsAt.map { " · resets \(Fmt.clock($0, now: now, hour12: hour12, timeZone: timeZone))" } ?? ""
+        lines.append("\(m.name) \(pctText(m.pct))\(resets) · from \(MeterRowModel.sourceName(m.source)) · read \(Fmt.age(now.timeIntervalSince(m.readAt)))")
+        if let from = colourFrom { lines.append("Colour from \(from.name)") }
         if let why = fresh.hover(readAt: m.readAt, now: now, hour12: hour12, timeZone: timeZone) { lines.append(why) }
         return TitleItem(text: pctText(m.pct), tag: tag, colour: colour, stale: stale, hover: lines.joined(separator: "\n"))
     }
 
-    static func pctText(_ pct: Double) -> String { String(format: "%.0f%%", pct) }
+    /// The whole percent shown everywhere (title, rows, notifications, VoiceOver): floored, never rounded, so it
+    /// agrees with colour, which compares the true number against red_at (R-44: used >= 97, R-196: 96.9 is not red).
+    static func whole(_ pct: Double) -> Int { Int((pct + 1e-9).rounded(.down)) }
+
+    static func pctText(_ pct: Double) -> String { "\(whole(pct))%" }
 }

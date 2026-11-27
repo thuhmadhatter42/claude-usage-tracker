@@ -81,4 +81,44 @@ final class HouseJusageUninstallTests: XCTestCase {
         XCTAssertTrue(out.contains("boom"), out)
         XCTAssertEqual(scriptRan, 0)
     }
+
+    // MARK: uninstall with no engine (review 11): the common reason to uninstall is that bring-up failed.
+
+    private func writeConfig(_ json: String) throws -> String {
+        let dir = home.appendingPathComponent("state")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try json.write(to: dir.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+        return dir.path
+    }
+
+    func testNoEngineAndNoWrappedStatusLineIsNothingToRestore() throws {
+        let dir = try writeConfig(#"{"statusline": {"/h/.claude": {"enabled": false, "original": null, "wrapped": "x"}}}"#)
+        XCTAssertEqual(JusageUninstall.statusLineOffWithoutEngine(stateDir: dir, home: home.path).0, 0)
+        let none = home.appendingPathComponent("never-made").path
+        XCTAssertEqual(JusageUninstall.statusLineOffWithoutEngine(stateDir: none, home: home.path).0, 0, "no config at all: never wrapped")
+        let empty = try writeConfig("{}")
+        XCTAssertEqual(JusageUninstall.statusLineOffWithoutEngine(stateDir: empty, home: home.path).0, 0)
+    }
+
+    func testNoEngineButAWrappedStatusLineSaysWhatToDoByHand() throws {
+        let dir = try writeConfig(#"{"statusline": {"/h/.claude": {"enabled": true, "original": "echo hi", "wrapped": "x"}}}"#)
+        let (rc, out) = JusageUninstall.statusLineOffWithoutEngine(stateDir: dir, home: home.path)
+        XCTAssertNotEqual(rc, 0)
+        XCTAssertTrue(out.contains("config.json"), out)
+        XCTAssertTrue(out.contains("original"), out)
+    }
+
+    func testUnreadableConfigIsNotAssumedClean() throws {
+        let dir = try writeConfig("not json")
+        XCTAssertNotEqual(JusageUninstall.statusLineOffWithoutEngine(stateDir: dir, home: home.path).0, 0)
+    }
+
+    func testUninstallPrepProceedsWhenThereIsNothingToRestore() throws {
+        try write(".zshrc", "alias jusage='x'\n")
+        let dir = try writeConfig("{}")
+        let prep = JusageUninstall.Prep(statusLineOff: { [home = home!] in JusageUninstall.statusLineOffWithoutEngine(stateDir: dir, home: home.path) },
+                                        loginItemOff: {}, home: home)
+        XCTAssertNil(prep.run())
+        XCTAssertEqual(try read(".zshrc"), "")
+    }
 }

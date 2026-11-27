@@ -191,13 +191,13 @@ struct SettingsView: View {
                 caption("Accounts")
                 ForEach(accounts.sorted { $0.number < $1.number }, id: \.key) { a in
                     HStack {
-                        Toggle(AccountBlockModel.localPart(a.email), isOn: Binding(
+                        Toggle(a.label, isOn: Binding(
                             get: { store.settings.isAccountShown(a.key) },
                             set: { on in store.update { st in
                                 st.hiddenAccounts.removeAll { $0 == a.key }
                                 if !on { st.hiddenAccounts.append(a.key) }
                             } }))
-                        .help(a.email)
+                        .help(a.identity)
                         Spacer()
                         TextField(String(a.number), text: Binding(
                             get: { store.settings.menuBarTags[a.key] ?? "" },
@@ -230,7 +230,7 @@ struct SettingsView: View {
             if let accounts = feed?.accounts, !accounts.isEmpty {
                 caption(SettingsRow.statusLineText)
                 ForEach(accounts.sorted { $0.number < $1.number }, id: \.key) { a in
-                    Toggle(AccountBlockModel.localPart(a.email), isOn: Binding(
+                    Toggle(a.label, isOn: Binding(
                         get: { engine.statuslineSet[a.key] ?? feed?.statusline[a.key]?.enabled ?? false },
                         set: { on in Task { await engine.setStatusline(on, folder: a.key) } }))
                     refusal(engine.statuslineErrors[a.key])
