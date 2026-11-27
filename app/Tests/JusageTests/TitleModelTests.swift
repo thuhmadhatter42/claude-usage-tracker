@@ -64,6 +64,19 @@ final class TitleModelTests: XCTestCase {
         XCTAssertEqual(make(f, s)[0].text, "37%", "the text still shows the chosen meter")
     }
 
+    /// Review 12: the hover uses the panel's wording for the source and says which meter set the colour.
+    func testHoverNamesTheSourceAndTheMeterThatSetTheColour() throws {
+        let f = try Fixture.feed()
+        var s = AppSettings()
+        let plain = make(f, s)[0].hover
+        XCTAssertTrue(plain.contains("from Anthropic"), plain)
+        XCTAssertFalse(plain.contains("service"), "no raw source code: \(plain)")
+        XCTAssertFalse(plain.contains("Colour from"), "nothing to add when the shown meter sets the colour")
+        s.colourByWorstMeter = true
+        let worst = make(f, s)[0].hover
+        XCTAssertTrue(worst.contains("Colour from Weekly") || worst.contains("Colour from \(f.accounts[0].meters[1].name)"), worst)
+    }
+
     func testWorstMeterIgnoresStaleMeters() throws {
         // Weekly goes stale (old read_at) while session stays fresh: the amber weekly no longer counts.
         let f = try feed { a in

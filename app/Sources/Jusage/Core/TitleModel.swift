@@ -53,13 +53,16 @@ enum TitleModel {
         let stale = fresh.isStale
 
         var colour: PaceState? = nil
+        var colourFrom: Feed.Meter? = nil
         if !stale {
             if settings.colourByWorstMeter {
                 // Worst of this account's meters that are fresh and carry a colour (stale ones never count).
-                colour = a.meters
+                let worst = a.meters
                     .filter { !feed.freshness(of: $0, in: a, now: now).isStale }
-                    .compactMap { $0.pace.state }
-                    .max()
+                    .compactMap { meter in meter.pace.state.map { (meter, $0) } }
+                    .max { $0.1 < $1.1 }
+                colour = worst?.1
+                if let w = worst?.0, w.id != m.id { colourFrom = w }
             } else {
                 colour = m.pace.state
             }
@@ -67,7 +70,8 @@ enum TitleModel {
 
         var lines = [a.identity]
         let resets = m.resetsAt.map { " · resets \(Fmt.clock($0, now: now, hour12: hour12, timeZone: timeZone))" } ?? ""
-        lines.append("\(m.name) \(pctText(m.pct))\(resets) · \(m.source) · read \(Fmt.age(now.timeIntervalSince(m.readAt)))")
+        lines.append("\(m.name) \(pctText(m.pct))\(resets) · from \(MeterRowModel.sourceName(m.source)) · read \(Fmt.age(now.timeIntervalSince(m.readAt)))")
+        if let from = colourFrom { lines.append("Colour from \(from.name)") }
         if let why = fresh.hover(readAt: m.readAt, now: now, hour12: hour12, timeZone: timeZone) { lines.append(why) }
         return TitleItem(text: pctText(m.pct), tag: tag, colour: colour, stale: stale, hover: lines.joined(separator: "\n"))
     }
