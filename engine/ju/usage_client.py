@@ -5,6 +5,7 @@ two known shapes, or holds a percent outside 0-101, is `ReplyChanged`.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import math
 import re
@@ -64,8 +65,8 @@ def _retry_after(value: Optional[str]) -> Optional[int]:
 
 def fetch(token: str, url: str = constants.USAGE_URL) -> dict:
     """GET the usage reply. 401 -> LoginError(login_expired); 429 -> RateLimited(retry_after_s);
-    any redirect or other status -> HttpError(status); no connection -> NetworkError; a body that
-    is not JSON -> ReplyChanged."""
+    any redirect or other status -> HttpError(status); no connection, or one that breaks mid-reply
+    (http.client errors are not OSError) -> NetworkError; a body that is not JSON -> ReplyChanged."""
     req = urllib.request.Request(url, method="GET", headers={
         "Authorization": f"Bearer {token}",
         "anthropic-beta": constants.ANTHROPIC_BETA,
@@ -83,11 +84,11 @@ def fetch(token: str, url: str = constants.USAGE_URL) -> dict:
         if e.code == 429:
             raise RateLimited(_retry_after(e.headers.get("Retry-After"))) from None
         raise HttpError(e.code) from None
-    except (urllib.error.URLError, OSError):
+    except (urllib.error.URLError, OSError, http.client.HTTPException):
         raise NetworkError() from None
     try:
         return json.loads(body.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
         raise ReplyChanged() from None
 
 

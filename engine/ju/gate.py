@@ -217,11 +217,15 @@ def _refresh_locked(state: Path, accounts: List[str], manual: bool, deps: GateDe
                 if conn is None:
                     conn = deps.open_db(state)
                 log_meters(conn, reader, reading)
-        if changed:
-            deps.store.save(state, live)
     finally:
-        if conn is not None:
-            conn.close()
+        # saved even when something below a fetch raises: a Retry-After or a reading already taken
+        # must never be lost and asked for again (a lost block is a call storm)
+        try:
+            if changed:
+                deps.store.save(state, live)
+        finally:
+            if conn is not None:
+                conn.close()
     blocks = []
     for _, members, uuid in groups:
         cur = _current_key(live, members)

@@ -316,6 +316,28 @@ class TestRefresh(RefreshCase):
                 self.assertIsNone(res.live.account(self.b).error)
                 self.assertIsNotNone(res.live.account(self.a).blocked_until)
 
+    def test_a_crash_after_a_fetch_still_saves_every_account(self):
+        """Review-engine 1: #1 is told to wait an hour, then logging #2's reading fails (a locked
+        database). The error is loud, but #1's block and #2's reading are on disk, so the next run
+        does not call the service 30 s after it was asked to wait an hour."""
+        s = Script(self.io, self.state, logins={self.a: "ta", self.b: "tb"},
+                   uuids={self.a: ["u1"], self.b: ["u2"]},
+                   replies={"ta": [RateLimited(3600)], "tb": [reply(10)]})
+        deps = s.deps()
+
+        def locked(state):
+            raise sqlite3.OperationalError("database is locked")
+        deps = replace(deps, open_db=locked)
+        with self.assertRaises(sqlite3.OperationalError):
+            gate.refresh(self.state, [self.a, self.b], manual=False, deps=deps)
+        on_disk = LiveStore(self.io.store_io()).load(self.state, [self.a, self.b])
+        self.assertEqual(on_disk.account(self.a).blocked_until, T0 + timedelta(seconds=3600))
+        self.assertTrue(on_disk.account(self.a).retry_after_explicit)
+        self.assertEqual(on_disk.account(self.b).data, reply(10))
+        s.clock[0] = T0 + timedelta(seconds=30)
+        gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
+        self.assertEqual(s.fetched_tokens, ["ta", "tb"])     # nothing read again
+
     def test_identity_changed_discarded_last_good_kept(self):
         s = Script(self.io, self.state, logins={self.a: "ta"}, uuids={self.a: ["u1"]}, replies={"ta": [reply(40)]})
         gate.refresh(self.state, [self.a], manual=False, deps=s.deps())
