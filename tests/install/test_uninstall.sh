@@ -15,6 +15,7 @@ mkdir -p "$H/tmp" "$APPS" "$STUBS" "$HOST" "$TRASHED"
 stub() { printf '#!/bin/bash\n%s\n' "$2" > "$STUBS/$1"; chmod +x "$STUBS/$1"; }
 stub open 'exit 0'; stub osascript 'exit 0'; stub pgrep 'exit 1'
 stub spctl 'echo "accepted source=Notarized Developer ID"; exit 0'
+stub codesign 'case " $* " in *" -dv "*) echo "TeamIdentifier=9WTFGV63S2" >&2; exit 0 ;; *" --verify "*) exit 0 ;; esac; exit 1'
 stub xcode-select '[ "$1" = "-p" ] && { echo /Library/Developer/CommandLineTools; exit 0; }; exit 0'
 stub sw_vers '[ "$1" = "-productVersion" ] && { echo 14.5; exit 0; }; exec /usr/bin/sw_vers "$@"'
 stub trash "for p in \"\$@\"; do mv \"\$p\" '$TRASHED/'\"\$(basename \"\$p\").\$\$.\$RANDOM\"; done"

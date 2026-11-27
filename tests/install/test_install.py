@@ -84,6 +84,19 @@ class StillAttachedTests(unittest.TestCase):
         self.assertTrue(still_attached("/tmp/t", info=lambda: "x /tmp/t/a.dmg", tries=3, pause=0))
 
 
+# codesign as the installer uses it, signed by FAKE_TEAM (J's team unless a test says otherwise):
+# `--verify ... -R=<requirement>` passes only when the requirement names that team; `-dv` prints it.
+CODESIGN_STUB = r"""#!/bin/bash
+echo "codesign $*" >> '@CALLS@'
+team="${FAKE_TEAM:-9WTFGV63S2}"
+case " $* " in
+  *" -dv "*) echo "Authority=Developer ID Application: Someone ($team)" >&2; echo "TeamIdentifier=$team" >&2; exit 0 ;;
+  *" --verify "*) case "$*" in *"\"$team\""*) exit 0 ;; *) echo "test-requirement: code failed to satisfy specified code requirement(s)" >&2; exit 3 ;; esac ;;
+esac
+exit 1
+"""
+
+
 class Installer(unittest.TestCase):
     def setUp(self):
         self.tmp = h.scratch()
@@ -99,6 +112,7 @@ class Installer(unittest.TestCase):
         for name in ("open", "osascript"):
             h.write_exe(self.stubs / name, f"#!/bin/bash\necho \"{name} $*\" >> '{self.calls}'\nexit 0\n")
         h.write_exe(self.stubs / "spctl", f"#!/bin/bash\necho \"spctl $*\" >> '{self.calls}'\necho 'accepted source=Notarized Developer ID'\nexit 0\n")
+        h.write_exe(self.stubs / "codesign", CODESIGN_STUB.replace("@CALLS@", str(self.calls)))
         h.write_exe(self.stubs / "pgrep", "#!/bin/bash\nexit 1\n")
         h.write_exe(self.stubs / "xcode-select", "#!/bin/bash\n[ \"$1\" = \"-p\" ] && { echo /Library/Developer/CommandLineTools; exit 0; }\nexit 0\n")
         h.write_exe(self.stubs / "sw_vers", "#!/bin/bash\n[ \"$1\" = \"-productVersion\" ] && { echo 14.5; exit 0; }\nexec /usr/bin/sw_vers \"$@\"\n")
@@ -309,6 +323,23 @@ class TestDownloadInstall(Installer):
         self.assertEqual(rc, 1)
         self.assertIn("install.log", out)
         self.nothing_installed()
+
+    def test_other_developer_team_refused(self):
+        """Review-security 4: notarized by somebody is not enough; only J's team (9WTFGV63S2) installs."""
+        rc, out = self.install(FAKE_TEAM="ABCDE12345")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("9WTFGV63S2", out)
+        self.nothing_installed()
+
+    def test_disk_image_and_app_checked_against_the_team(self):
+        rc, out = self.install()
+        self.assertEqual(rc, 0, out)
+        verifies = [l for l in self.calls.read_text().splitlines() if l.startswith("codesign --verify")]
+        self.assertEqual(len(verifies), 2, verifies)
+        self.assertTrue(verifies[0].endswith("jusage.dmg"), verifies[0])
+        self.assertTrue(verifies[1].endswith("jusage.app"), verifies[1])
+        for v in verifies:
+            self.assertIn('certificate leaf[subject.OU] = "9WTFGV63S2"', v)
 
     def test_wrong_bundle_id_refused(self):
         # Built straight from a source folder: mounting the good DMG to copy it raced the disk-image
