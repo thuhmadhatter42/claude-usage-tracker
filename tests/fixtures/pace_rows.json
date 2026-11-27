@@ -1,0 +1,510 @@
+{
+ "_about": "Pace fixture (T1). rows sim-* are the simulated rows of research/r2-pace-math.md (24 of them: 12 five-hour, 12 seven-day), expected values recomputed under the amended spec: red = used >= 97, amber = past the white line (used > time gone, never while time gone < 3%), green otherwise; the forecast (landing, runs-out) never changes the colour. old_verdict is what the research table said under the old 80/105 landing bands. x-* rows are boundaries. t_s = seconds since the window started (period - time to reset); used = percent. expect.landing is percent at the reset (null in warm-up and when the reset is due); expect.runs_out_in_s = whole seconds from now until 100%, only when landing >= 105 and it falls before the reset. reset_due rows have state null: the colour is the stale grey, not a pace state.",
+ "rules": {
+  "red_at": 97.0,
+  "warmup_e": 0.03,
+  "span_floor_div": 7,
+  "runs_out_landing": 105,
+  "periods_s": {
+   "5h": 18000,
+   "7d": 604800
+  }
+ },
+ "landing_tol": 0.0001,
+ "rows": [
+  {
+   "id": "sim-5h-burst-5m",
+   "window": "5h",
+   "t_s": 300,
+   "used": 8,
+   "old_verdict": "hidden",
+   "expect": {
+    "forecast": false,
+    "landing": null,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-5h-burst-15m",
+   "window": "5h",
+   "t_s": 900,
+   "used": 8,
+   "old_verdict": "on pace (56%)",
+   "expect": {
+    "forecast": true,
+    "landing": 56.0,
+    "state": "amber",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-5h-burst-30m",
+   "window": "5h",
+   "t_s": 1800,
+   "used": 8,
+   "old_verdict": "on pace (56%)",
+   "expect": {
+    "forecast": true,
+    "landing": 56.0,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-5h-burst-60m",
+   "window": "5h",
+   "t_s": 3600,
+   "used": 8,
+   "old_verdict": "on pace (40%)",
+   "expect": {
+    "forecast": true,
+    "landing": 40.0,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-5h-onpace-5m",
+   "window": "5h",
+   "t_s": 300,
+   "used": 1.7,
+   "old_verdict": "hidden",
+   "expect": {
+    "forecast": false,
+    "landing": null,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-5h-onpace-15m",
+   "window": "5h",
+   "t_s": 900,
+   "used": 5,
+   "old_verdict": "on pace (35%)",
+   "expect": {
+    "forecast": true,
+    "landing": 35.0,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-5h-onpace-30m",
+   "window": "5h",
+   "t_s": 1800,
+   "used": 10,
+   "old_verdict": "on pace (70%)",
+   "expect": {
+    "forecast": true,
+    "landing": 70.0,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-5h-onpace-60m",
+   "window": "5h",
+   "t_s": 3600,
+   "used": 20,
+   "old_verdict": "close (100%)",
+   "expect": {
+    "forecast": true,
+    "landing": 100.0,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-5h-fast-5m",
+   "window": "5h",
+   "t_s": 300,
+   "used": 2.5,
+   "old_verdict": "hidden",
+   "expect": {
+    "forecast": false,
+    "landing": null,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-5h-fast-15m",
+   "window": "5h",
+   "t_s": 900,
+   "used": 7.5,
+   "old_verdict": "on pace (52%)",
+   "expect": {
+    "forecast": true,
+    "landing": 52.5,
+    "state": "amber",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-5h-fast-30m",
+   "window": "5h",
+   "t_s": 1800,
+   "used": 15,
+   "old_verdict": "hit limit (105%)",
+   "expect": {
+    "forecast": true,
+    "landing": 105.0,
+    "state": "amber",
+    "runs_out_in_s": 14571,
+    "reset_due": false
+   },
+   "edge": "landing is exactly 105: compute with integers or SPAN_FLOOR_DIV, never a float division that can land on 104.999..."
+  },
+  {
+   "id": "sim-5h-fast-60m",
+   "window": "5h",
+   "t_s": 3600,
+   "used": 30,
+   "old_verdict": "hit limit (150%)",
+   "expect": {
+    "forecast": true,
+    "landing": 150.0,
+    "state": "amber",
+    "runs_out_in_s": 8400,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-7d-burst-4h",
+   "window": "7d",
+   "t_s": 14400,
+   "used": 15,
+   "old_verdict": "hidden",
+   "expect": {
+    "forecast": false,
+    "landing": null,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-7d-burst-12h",
+   "window": "7d",
+   "t_s": 43200,
+   "used": 15,
+   "old_verdict": "hit limit (105%)",
+   "expect": {
+    "forecast": true,
+    "landing": 105.0,
+    "state": "amber",
+    "runs_out_in_s": 489600,
+    "reset_due": false
+   },
+   "edge": "landing is exactly 105: compute with integers or SPAN_FLOOR_DIV, never a float division that can land on 104.999..."
+  },
+  {
+   "id": "sim-7d-burst-24h",
+   "window": "7d",
+   "t_s": 86400,
+   "used": 15,
+   "old_verdict": "hit limit (105%)",
+   "expect": {
+    "forecast": true,
+    "landing": 105.0,
+    "state": "amber",
+    "runs_out_in_s": 489600,
+    "reset_due": false
+   },
+   "edge": "landing is exactly 105: compute with integers or SPAN_FLOOR_DIV, never a float division that can land on 104.999..."
+  },
+  {
+   "id": "sim-7d-onpace-4h",
+   "window": "7d",
+   "t_s": 14400,
+   "used": 2.4,
+   "old_verdict": "hidden",
+   "expect": {
+    "forecast": false,
+    "landing": null,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-7d-onpace-12h",
+   "window": "7d",
+   "t_s": 43200,
+   "used": 7.1,
+   "old_verdict": "on pace (50%)",
+   "expect": {
+    "forecast": true,
+    "landing": 49.7,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-7d-onpace-24h",
+   "window": "7d",
+   "t_s": 86400,
+   "used": 14.3,
+   "old_verdict": "close (100%)",
+   "note": "used is the research table's rounded 14.3; exact on pace is 14.2857, so this row is a hair past the white line",
+   "expect": {
+    "forecast": true,
+    "landing": 100.1,
+    "state": "amber",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-7d-fast-4h",
+   "window": "7d",
+   "t_s": 14400,
+   "used": 3.6,
+   "old_verdict": "hidden",
+   "expect": {
+    "forecast": false,
+    "landing": null,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-7d-fast-12h",
+   "window": "7d",
+   "t_s": 43200,
+   "used": 10.7,
+   "old_verdict": "on pace (75%)",
+   "expect": {
+    "forecast": true,
+    "landing": 74.9,
+    "state": "amber",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-7d-fast-24h",
+   "window": "7d",
+   "t_s": 86400,
+   "used": 21.4,
+   "old_verdict": "hit limit (150%)",
+   "expect": {
+    "forecast": true,
+    "landing": 149.8,
+    "state": "amber",
+    "runs_out_in_s": 317338,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-7d-workday-4h",
+   "window": "7d",
+   "t_s": 14400,
+   "used": 4,
+   "old_verdict": "hidden",
+   "expect": {
+    "forecast": false,
+    "landing": null,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-7d-workday-12h",
+   "window": "7d",
+   "t_s": 43200,
+   "used": 10,
+   "old_verdict": "on pace (70%)",
+   "expect": {
+    "forecast": true,
+    "landing": 70.0,
+    "state": "amber",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "sim-7d-workday-24h",
+   "window": "7d",
+   "t_s": 86400,
+   "used": 10,
+   "old_verdict": "on pace (70%)",
+   "expect": {
+    "forecast": true,
+    "landing": 70.0,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "x-warmup-just-before",
+   "window": "5h",
+   "t_s": 539,
+   "used": 2,
+   "note": "boundary: e just under 3%",
+   "expect": {
+    "forecast": false,
+    "landing": null,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "x-warmup-exact",
+   "window": "5h",
+   "t_s": 540,
+   "used": 2,
+   "note": "boundary: e exactly 3%, forecast starts",
+   "expect": {
+    "forecast": true,
+    "landing": 14.0,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "x-white-line-equal",
+   "window": "5h",
+   "t_s": 3600,
+   "used": 20,
+   "note": "boundary: used exactly on the white line is green",
+   "expect": {
+    "forecast": true,
+    "landing": 100.0,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "x-white-line-over",
+   "window": "5h",
+   "t_s": 3600,
+   "used": 20.1,
+   "note": "boundary: a hair past the white line is amber",
+   "expect": {
+    "forecast": true,
+    "landing": 100.5,
+    "state": "amber",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "x-red-96-9",
+   "window": "5h",
+   "t_s": 17000,
+   "used": 96.9,
+   "note": "boundary: just under the red line",
+   "expect": {
+    "forecast": true,
+    "landing": 102.6,
+    "state": "amber",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "x-red-97",
+   "window": "5h",
+   "t_s": 17000,
+   "used": 97,
+   "note": "boundary: red at 97",
+   "expect": {
+    "forecast": true,
+    "landing": 102.705882,
+    "state": "red",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "x-red-in-warmup",
+   "window": "5h",
+   "t_s": 300,
+   "used": 97,
+   "note": "red ignores the warm-up",
+   "expect": {
+    "forecast": false,
+    "landing": null,
+    "state": "red",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "x-reset-due",
+   "window": "5h",
+   "t_s": 18000,
+   "used": 40,
+   "note": "reset time reached: no forecast, reset due",
+   "expect": {
+    "forecast": false,
+    "landing": null,
+    "state": null,
+    "runs_out_in_s": null,
+    "reset_due": true
+   }
+  },
+  {
+   "id": "x-reset-due-late",
+   "window": "7d",
+   "t_s": 608400,
+   "used": 40,
+   "note": "reset time passed: no forecast, reset due",
+   "expect": {
+    "forecast": false,
+    "landing": null,
+    "state": null,
+    "runs_out_in_s": null,
+    "reset_due": true
+   }
+  },
+  {
+   "id": "x-onpace-7d-exact",
+   "window": "7d",
+   "t_s": 151200,
+   "used": 25,
+   "note": "exactly on pace on the week (the sim-7d-onpace rows carry the table's rounded numbers, which can sit a hair over the line)",
+   "expect": {
+    "forecast": true,
+    "landing": 100.0,
+    "state": "green",
+    "runs_out_in_s": null,
+    "reset_due": false
+   }
+  },
+  {
+   "id": "x-amber-weekly-runs-out",
+   "window": "7d",
+   "t_s": 276000,
+   "used": 52,
+   "note": "amber with runs-out inside the period",
+   "expect": {
+    "forecast": true,
+    "landing": 113.947826,
+    "state": "amber",
+    "runs_out_in_s": 254769,
+    "reset_due": false
+   }
+  }
+ ]
+}

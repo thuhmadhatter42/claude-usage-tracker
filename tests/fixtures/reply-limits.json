@@ -1,0 +1,24 @@
+{
+ "limits": [
+  {
+   "kind": "session",
+   "percent": 37,
+   "resets_at": "2026-11-27T08:10:00.123456+00:00"
+  },
+  {
+   "kind": "weekly_all",
+   "percent": 52,
+   "resets_at": "2026-12-01T01:00:00+00:00"
+  },
+  {
+   "kind": "weekly_scoped",
+   "percent": 18,
+   "resets_at": "2026-12-01T17:30:00+00:00",
+   "scope": {
+    "model": {
+     "display_name": "Fable 5"
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,374 @@
+{
+ "schema": 2,
+ "version": "0.2.0",
+ "generated": "2026-11-26T21:40:00-08:00",
+ "next_due": "2026-11-26T21:41:00-08:00",
+ "rules": {
+  "stale_after_s": 900,
+  "red_at": 97,
+  "warmup_e": 0.03,
+  "read_every_s": 60
+ },
+ "me": {
+  "user": "Sam",
+  "install_id": "a1b2"
+ },
+ "accounts": [
+  {
+   "key": "/abs/.claude",
+   "number": 1,
+   "email": "sam@example.com",
+   "uuid": "11111111-1111-4111-8111-111111111111",
+   "folders": [
+    "/abs/.claude"
+   ],
+   "weekly_reset": "2026-11-30T17:00:00-08:00",
+   "flags": [
+    "using_credits",
+    "reset_available"
+   ],
+   "warning": null,
+   "error": null,
+   "no_session_meter": false,
+   "meters": [
+    {
+     "id": "session",
+     "name": "Session",
+     "pct": 37.0,
+     "resets_at": "2026-11-27T00:10:00-08:00",
+     "read_at": "2026-11-26T21:39:00-08:00",
+     "source": "service",
+     "period_s": 18000,
+     "disagree": false,
+     "pace": {
+      "e": 0.5,
+      "landing": 74.0,
+      "state": "green",
+      "forecast": true,
+      "runs_out": null,
+      "reset_due": false,
+      "words": "On pace: about 75% by the reset."
+     },
+     "split": null
+    },
+    {
+     "id": "weekly",
+     "name": "Weekly",
+     "pct": 52.0,
+     "resets_at": "2026-11-30T17:00:00-08:00",
+     "read_at": "2026-11-26T21:39:00-08:00",
+     "source": "service",
+     "period_s": 604800,
+     "disagree": false,
+     "pace": {
+      "e": 0.4563,
+      "landing": 113.9,
+      "state": "amber",
+      "forecast": true,
+      "runs_out": "2026-11-29T20:26:09-08:00",
+      "reset_due": false,
+      "words": "At this pace you hit the limit Sun 20:26, 20h 33m before the reset."
+     },
+     "split": {
+      "period_start": "2026-11-23T17:00:00-08:00",
+      "parts": [
+       {
+        "user": "Sam",
+        "install_id": "a1b2",
+        "usd": 412.0,
+        "share": 0.71
+       },
+       {
+        "user": "Lee",
+        "install_id": "c3d4",
+        "usd": 168.2,
+        "share": 0.29
+       }
+      ]
+     }
+    },
+    {
+     "id": "weekly:fable",
+     "name": "Weekly · Fable",
+     "pct": 18.0,
+     "resets_at": "2026-12-01T09:30:00-08:00",
+     "read_at": "2026-11-26T21:39:00-08:00",
+     "source": "service",
+     "period_s": 604800,
+     "disagree": false,
+     "pace": {
+      "e": 0.3581,
+      "landing": 50.3,
+      "state": "green",
+      "forecast": true,
+      "runs_out": null,
+      "reset_due": false,
+      "words": "On pace: about 50% by the reset."
+     },
+     "split": null
+    }
+   ],
+   "session_share": {
+    "current": 4.0,
+    "last": 11.0,
+    "median7": 9.0,
+    "list": [
+     {
+      "start": "2026-11-26T14:00:00-08:00",
+      "pct": 11.0
+     },
+     {
+      "start": "2026-11-26T19:10:00-08:00",
+      "pct": 4.0
+     }
+    ],
+    "as_of": "2026-11-26T21:39:00-08:00"
+   },
+   "missing_people": []
+  },
+  {
+   "key": "/abs/.claude-newaccount",
+   "number": 2,
+   "email": "pat@example.com",
+   "uuid": "22222222-2222-4222-8222-222222222222",
+   "folders": [
+    "/abs/.claude-newaccount"
+   ],
+   "weekly_reset": "2026-12-02T10:00:00-08:00",
+   "flags": [],
+   "warning": "login read from the legacy Keychain item, which names no account",
+   "error": {
+    "kind": "rate_limited",
+    "text": "Anthropic is rate-limiting usage reads; next try 21:57",
+    "until": "2026-11-26T21:57:00-08:00"
+   },
+   "no_session_meter": false,
+   "meters": [
+    {
+     "id": "session",
+     "name": "Session",
+     "pct": 98.0,
+     "resets_at": "2026-11-26T23:00:00-08:00",
+     "read_at": "2026-11-26T21:12:00-08:00",
+     "source": "last_good",
+     "period_s": 18000,
+     "disagree": false,
+     "pace": {
+      "e": 0.7333,
+      "landing": 133.6,
+      "state": "red",
+      "forecast": true,
+      "runs_out": "2026-11-26T21:44:29-08:00",
+      "reset_due": false,
+      "words": "2% left. Resets 23:00."
+     },
+     "split": null
+    },
+    {
+     "id": "weekly",
+     "name": "Weekly",
+     "pct": 35.0,
+     "resets_at": "2026-12-02T10:00:00-08:00",
+     "read_at": "2026-11-26T21:12:00-08:00",
+     "source": "last_good",
+     "period_s": 604800,
+     "disagree": false,
+     "pace": {
+      "e": 0.2123,
+      "landing": 164.9,
+      "state": "amber",
+      "forecast": true,
+      "runs_out": "2026-11-29T15:54:17-08:00",
+      "reset_due": false,
+      "words": "At this pace you hit the limit Sun 15:54, 66h 05m before the reset."
+     },
+     "split": null
+    }
+   ],
+   "session_share": null,
+   "missing_people": [
+    "Lee"
+   ]
+  }
+ ],
+ "totals": {
+  "as_of": "2026-11-26T21:40:00-08:00",
+  "today": {
+   "tokens": 18400000,
+   "usd": 63.2,
+   "calls": 412,
+   "unpriced": 0
+  },
+  "week": {
+   "tokens": 96000000,
+   "usd": 412.0,
+   "unpriced": 0
+  }
+ },
+ "windows": [
+  {
+   "account": "/abs/.claude",
+   "start": "2026-11-26T19:00:00-08:00",
+   "end": "2026-11-27T00:00:00-08:00",
+   "tokens": 6200000,
+   "usd": 21.4,
+   "open": true
+  },
+  {
+   "account": "/abs/.claude",
+   "start": "2026-11-26T14:00:00-08:00",
+   "end": "2026-11-26T19:00:00-08:00",
+   "tokens": 9100000,
+   "usd": 30.1,
+   "open": false
+  }
+ ],
+ "models": [
+  {
+   "id": "claude-opus-5",
+   "name": "opus-5",
+   "tokens": 70000000,
+   "usd": 330.5
+  },
+  {
+   "id": "claude-sonnet-5",
+   "name": "sonnet-5",
+   "tokens": 26000000,
+   "usd": 81.5
+  }
+ ],
+ "projects": [
+  {
+   "name": "jusage",
+   "share": 0.62,
+   "tokens": 59520000
+  },
+  {
+   "name": "subagents",
+   "share": 0.38,
+   "tokens": 36480000
+  }
+ ],
+ "months": [
+  {
+   "key": "2026-11",
+   "label": "November",
+   "tokens": 310000000,
+   "usd": 1480.0,
+   "calls": 9120,
+   "types": {
+    "input": 4000000,
+    "cache_w": 52000000,
+    "cache_read": 240000000,
+    "output": 14000000
+   },
+   "models": [
+    {
+     "id": "claude-opus-5",
+     "name": "opus-5",
+     "tokens": 250000000,
+     "usd": 1200.0
+    }
+   ],
+   "projects": [
+    {
+     "name": "jusage",
+     "share": 0.7,
+     "tokens": 217000000
+    }
+   ]
+  }
+ ],
+ "people": [
+  {
+   "install_id": "c3d4",
+   "user": "Lee",
+   "host": "mac",
+   "generated": "2026-11-26T21:38:00-08:00",
+   "today": {
+    "tokens": 5200000,
+    "usd": 18.0
+   },
+   "week": {
+    "tokens": 31000000,
+    "usd": 168.2
+   },
+   "accounts": [
+    {
+     "key": "/abs/lee/.claude",
+     "number": 1,
+     "email": "lee@example.com",
+     "uuid": "33333333-3333-4333-8333-333333333333",
+     "folders": [
+      "/abs/lee/.claude"
+     ],
+     "weekly_reset": "2026-11-29T08:00:00-08:00",
+     "flags": [],
+     "warning": null,
+     "error": null,
+     "no_session_meter": false,
+     "meters": [
+      {
+       "id": "session",
+       "name": "Session",
+       "pct": 12.0,
+       "resets_at": "2026-11-27T01:20:00-08:00",
+       "read_at": "2026-11-26T21:38:00-08:00",
+       "source": "service",
+       "period_s": 18000,
+       "disagree": false,
+       "pace": {
+        "e": 0.2667,
+        "landing": 45.0,
+        "state": "green",
+        "forecast": true,
+        "reset_due": false,
+        "words": "On pace: about 45% by the reset."
+       },
+       "split": null
+      },
+      {
+       "id": "weekly",
+       "name": "Weekly",
+       "pct": 20.0,
+       "resets_at": "2026-11-29T08:00:00-08:00",
+       "read_at": "2026-11-26T21:38:00-08:00",
+       "source": "service",
+       "period_s": 604800,
+       "disagree": false,
+       "pace": {
+        "e": 0.6528,
+        "landing": 30.6,
+        "state": "green",
+        "forecast": true,
+        "reset_due": false,
+        "words": "On pace: about 30% by the reset."
+       },
+       "split": null
+      }
+     ],
+     "session_share": null,
+     "missing_people": []
+    }
+   ]
+  }
+ ],
+ "statusline": {
+  "/abs/.claude": {
+   "enabled": false,
+   "capture_at": null
+  },
+  "/abs/.claude-newaccount": {
+   "enabled": true,
+   "capture_at": "2026-11-26T21:35:00-08:00"
+  }
+ },
+ "dashboard": "/abs/dashboard.html",
+ "share": {
+  "written_at": "2026-11-26T21:36:00-08:00",
+  "error": null
+ },
+ "notes": [
+  "skipped Kim@mac-e5f6.json: report_version 1"
+ ]
+}

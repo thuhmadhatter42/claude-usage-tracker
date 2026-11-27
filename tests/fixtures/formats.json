@@ -1,0 +1,237 @@
+{
+ "_about": "Formats fixture (T1), the one table for the Python (E19), Swift (S2) and JS (D6) renderers. tokens: 1.23B / 4.5M / 450k / 12. usd: >= $100 no cents with a thousands separator, else two decimals. countdown: whole minutes floor; under 1h '42m', under 24h '2h 14m' (minutes zero-padded to two digits), else '5d 21h'; zero or less is 'due'. clock: 'HH:mm' or 'h:mm AM/PM' (the Mac's 12/24-hour setting = hour12) when the instant is on the same calendar day as now in the given offset, else the three-letter English weekday before it ('Fri 14:05'). No case sits on a half-rounding edge, because Python, Swift and JS round halves differently.",
+ "tokens": [
+  {
+   "n": 0,
+   "text": "0"
+  },
+  {
+   "n": 7,
+   "text": "7"
+  },
+  {
+   "n": 12,
+   "text": "12"
+  },
+  {
+   "n": 999,
+   "text": "999"
+  },
+  {
+   "n": 1000,
+   "text": "1k"
+  },
+  {
+   "n": 4321,
+   "text": "4k"
+  },
+  {
+   "n": 450000,
+   "text": "450k"
+  },
+  {
+   "n": 999000,
+   "text": "999k"
+  },
+  {
+   "n": 1000000,
+   "text": "1.0M"
+  },
+  {
+   "n": 4500000,
+   "text": "4.5M"
+  },
+  {
+   "n": 12345678,
+   "text": "12.3M"
+  },
+  {
+   "n": 999000000,
+   "text": "999.0M"
+  },
+  {
+   "n": 1000000000,
+   "text": "1.00B"
+  },
+  {
+   "n": 1230000000,
+   "text": "1.23B"
+  },
+  {
+   "n": 12340000000,
+   "text": "12.34B"
+  }
+ ],
+ "usd": [
+  {
+   "usd": 0,
+   "text": "$0.00"
+  },
+  {
+   "usd": 0.004,
+   "text": "$0.00"
+  },
+  {
+   "usd": 0.37,
+   "text": "$0.37"
+  },
+  {
+   "usd": 12.3,
+   "text": "$12.30"
+  },
+  {
+   "usd": 99.99,
+   "text": "$99.99"
+  },
+  {
+   "usd": 100,
+   "text": "$100"
+  },
+  {
+   "usd": 412,
+   "text": "$412"
+  },
+  {
+   "usd": 999.4,
+   "text": "$999"
+  },
+  {
+   "usd": 1234.56,
+   "text": "$1,235"
+  },
+  {
+   "usd": 98765.4,
+   "text": "$98,765"
+  },
+  {
+   "usd": 1234567.8,
+   "text": "$1,234,568"
+  }
+ ],
+ "countdown": [
+  {
+   "seconds": -30,
+   "text": "due"
+  },
+  {
+   "seconds": 0,
+   "text": "due"
+  },
+  {
+   "seconds": 59,
+   "text": "0m"
+  },
+  {
+   "seconds": 60,
+   "text": "1m"
+  },
+  {
+   "seconds": 2520,
+   "text": "42m"
+  },
+  {
+   "seconds": 3540,
+   "text": "59m"
+  },
+  {
+   "seconds": 3600,
+   "text": "1h 00m"
+  },
+  {
+   "seconds": 7500,
+   "text": "2h 05m"
+  },
+  {
+   "seconds": 8040,
+   "text": "2h 14m"
+  },
+  {
+   "seconds": 86340,
+   "text": "23h 59m"
+  },
+  {
+   "seconds": 86400,
+   "text": "1d 0h"
+  },
+  {
+   "seconds": 507600,
+   "text": "5d 21h"
+  },
+  {
+   "seconds": 604799,
+   "text": "6d 23h"
+  }
+ ],
+ "clock": [
+  {
+   "now": "2026-11-26T09:00:00-08:00",
+   "at": "2026-11-26T14:05:00-08:00",
+   "tz_offset_min": -480,
+   "hour12": false,
+   "text": "14:05"
+  },
+  {
+   "now": "2026-11-26T09:00:00-08:00",
+   "at": "2026-11-26T14:05:00-08:00",
+   "tz_offset_min": -480,
+   "hour12": true,
+   "text": "2:05 PM"
+  },
+  {
+   "now": "2026-11-26T09:00:00-08:00",
+   "at": "2026-11-26T00:10:00-08:00",
+   "tz_offset_min": -480,
+   "hour12": true,
+   "text": "12:10 AM"
+  },
+  {
+   "now": "2026-11-26T09:00:00-08:00",
+   "at": "2026-11-26T12:00:00-08:00",
+   "tz_offset_min": -480,
+   "hour12": true,
+   "text": "12:00 PM"
+  },
+  {
+   "now": "2026-11-26T09:00:00-08:00",
+   "at": "2026-11-26T23:59:00-08:00",
+   "tz_offset_min": -480,
+   "hour12": false,
+   "text": "23:59"
+  },
+  {
+   "now": "2026-11-26T09:00:00-08:00",
+   "at": "2026-11-27T00:10:00-08:00",
+   "tz_offset_min": -480,
+   "hour12": false,
+   "text": "Fri 00:10"
+  },
+  {
+   "now": "2026-11-26T09:00:00-08:00",
+   "at": "2026-11-27T14:05:00-08:00",
+   "tz_offset_min": -480,
+   "hour12": true,
+   "text": "Fri 2:05 PM"
+  },
+  {
+   "now": "2026-11-26T09:00:00-08:00",
+   "at": "2026-11-30T17:00:00-08:00",
+   "tz_offset_min": -480,
+   "hour12": false,
+   "text": "Mon 17:00"
+  },
+  {
+   "now": "2026-11-26T09:00:00-08:00",
+   "at": "2026-12-02T10:00:00-08:00",
+   "tz_offset_min": -480,
+   "hour12": true,
+   "text": "Wed 10:00 AM"
+  },
+  {
+   "now": "2026-11-26T09:00:00-08:00",
+   "at": "2026-11-26T22:30:00+00:00",
+   "tz_offset_min": -480,
+   "hour12": false,
+   "text": "14:30"
+  }
+ ]
+}

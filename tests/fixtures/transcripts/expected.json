@@ -1,0 +1,175 @@
+{
+ "_about": "Expected scan results for the transcripts in this folder (T1). rows = the assistant rows a parser must produce, per file and 1-based line; key = '<message id>:<request id>' or the row uuid when either id is missing; project = folder name of cwd, with '<repo>/.claude/worktrees/agent-*' credited to <repo>; cache_5m is derived (cache_creation_input_tokens minus 1h) when the breakdown is absent; complete = stop_reason is not null. skipped = lines no parser may count. After a full scan across account-a and account-b the ledger holds 6 distinct keys: msg_1:req_1 appears in both accounts and keeps the higher output (300, end_turn) on account #1; account-a is #1.",
+ "files": [
+  {
+   "path": "account-a/projects/-work-demo/sess-a1.jsonl",
+   "lines": 9
+  },
+  {
+   "path": "account-a/projects/-work-demo--claude-worktrees-agent-1/sess-a2.jsonl",
+   "lines": 1
+  },
+  {
+   "path": "account-b/projects/-work-demo/sess-a1.jsonl",
+   "lines": 1
+  }
+ ],
+ "rows": [
+  {
+   "file": "account-a/projects/-work-demo/sess-a1.jsonl",
+   "line": 1,
+   "case": "streaming-partial",
+   "key": "msg_1:req_1",
+   "ts": "2026-11-26T10:00:02-08:00",
+   "model": "claude-opus-5",
+   "project": "demo",
+   "session": "sess-a1",
+   "input": 100,
+   "cache_5m": 200,
+   "cache_1h": 50,
+   "cache_read": 1000,
+   "output": 40,
+   "stop_reason": null,
+   "complete": false
+  },
+  {
+   "file": "account-a/projects/-work-demo/sess-a1.jsonl",
+   "line": 2,
+   "case": "streaming-duplicate-final",
+   "key": "msg_1:req_1",
+   "ts": "2026-11-26T10:00:05-08:00",
+   "model": "claude-opus-5",
+   "project": "demo",
+   "session": "sess-a1",
+   "input": 100,
+   "cache_5m": 200,
+   "cache_1h": 50,
+   "cache_read": 1000,
+   "output": 300,
+   "stop_reason": "end_turn",
+   "complete": true
+  },
+  {
+   "file": "account-a/projects/-work-demo/sess-a1.jsonl",
+   "line": 3,
+   "case": "unfinished",
+   "key": "msg_2:req_2",
+   "ts": "2026-11-26T10:01:00-08:00",
+   "model": "claude-opus-5",
+   "project": "demo",
+   "session": "sess-a1",
+   "input": 7,
+   "cache_5m": 0,
+   "cache_1h": 0,
+   "cache_read": 0,
+   "output": 25,
+   "stop_reason": null,
+   "complete": false
+  },
+  {
+   "file": "account-a/projects/-work-demo/sess-a1.jsonl",
+   "line": 7,
+   "case": "old-cache-format",
+   "key": "msg_old:req_old",
+   "ts": "2026-11-26T10:03:00-08:00",
+   "model": "claude-opus-5",
+   "project": "demo",
+   "session": "sess-a1",
+   "input": 5,
+   "cache_5m": 300,
+   "cache_1h": 0,
+   "cache_read": 0,
+   "output": 9,
+   "stop_reason": "end_turn",
+   "complete": true
+  },
+  {
+   "file": "account-a/projects/-work-demo/sess-a1.jsonl",
+   "line": 8,
+   "case": "uuid-fallback",
+   "key": "uuid_fallback_1",
+   "ts": "2026-11-26T10:04:00-08:00",
+   "model": "claude-opus-5",
+   "project": "demo",
+   "session": "sess-a1",
+   "input": 3,
+   "cache_5m": 0,
+   "cache_1h": 0,
+   "cache_read": 0,
+   "output": 77,
+   "stop_reason": "end_turn",
+   "complete": true
+  },
+  {
+   "file": "account-a/projects/-work-demo/sess-a1.jsonl",
+   "line": 9,
+   "case": "plain",
+   "key": "msg_3:req_3",
+   "ts": "2026-11-26T23:30:00-08:00",
+   "model": "claude-sonnet-5",
+   "project": "demo",
+   "session": "sess-a1",
+   "input": 11,
+   "cache_5m": 20,
+   "cache_1h": 0,
+   "cache_read": 400,
+   "output": 50,
+   "stop_reason": "end_turn",
+   "complete": true
+  },
+  {
+   "file": "account-a/projects/-work-demo--claude-worktrees-agent-1/sess-a2.jsonl",
+   "line": 1,
+   "case": "worktree",
+   "key": "msg_w1:req_w1",
+   "ts": "2026-11-26T11:00:00-08:00",
+   "model": "claude-opus-5",
+   "project": "demo",
+   "session": "sess-a2",
+   "input": 9,
+   "cache_5m": 0,
+   "cache_1h": 0,
+   "cache_read": 10,
+   "output": 60,
+   "stop_reason": "end_turn",
+   "complete": true
+  },
+  {
+   "file": "account-b/projects/-work-demo/sess-a1.jsonl",
+   "line": 1,
+   "case": "same-key-other-account",
+   "key": "msg_1:req_1",
+   "ts": "2026-11-26T10:00:05-08:00",
+   "model": "claude-opus-5",
+   "project": "demo",
+   "session": "sess-a1",
+   "input": 100,
+   "cache_5m": 200,
+   "cache_1h": 50,
+   "cache_read": 1000,
+   "output": 300,
+   "stop_reason": "end_turn",
+   "complete": true
+  }
+ ],
+ "skipped": {
+  "synthetic-model": [
+   {
+    "file": "account-a/projects/-work-demo/sess-a1.jsonl",
+    "line": 4
+   }
+  ],
+  "malformed-line": [
+   {
+    "file": "account-a/projects/-work-demo/sess-a1.jsonl",
+    "line": 5
+   }
+  ],
+  "non-assistant": [
+   {
+    "file": "account-a/projects/-work-demo/sess-a1.jsonl",
+    "line": 6
+   }
+  ]
+ }
+}

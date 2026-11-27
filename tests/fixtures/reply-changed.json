@@ -1,0 +1,11 @@
+{
+ "usage": {
+  "windows": [
+   {
+    "name": "session",
+    "used_fraction": 0.37
+   }
+  ]
+ },
+ "plan": "max"
+}
