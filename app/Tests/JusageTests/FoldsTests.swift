@@ -121,7 +121,7 @@ final class FoldsTests: XCTestCase {
         var s = AppSettings()
         s.hiddenSections = [.models]
         XCTAssertTrue(DetailModel.models(feed: f, settings: s).isEmpty)
-        XCTAssertFalse(SplitModel.rows(feed: f, settings: s).isEmpty, "Alex's share of the week stays")
+        XCTAssertFalse(SplitModel.rows(feed: f, settings: s).isEmpty, "the plan split stays")
         XCTAssertFalse(DetailModel.windows(feed: f, settings: s, time: t).isEmpty)
         XCTAssertTrue(DetailModel.isShown(feed: f, settings: s, time: t))
         // Everything in it off, and no split rows: no empty fold.
