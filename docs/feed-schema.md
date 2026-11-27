@@ -28,10 +28,10 @@
              "types": {"input": 1, "cache_w": 1, "cache_read": 1, "output": 1}, "models": [], "projects": []}],
  "people": [{"install_id": "c3d4", "user": "Lee", "host": "mac", "generated": "ISO",
              "today": {"tokens": 1, "usd": 1.0, "calls": 1, "unpriced": 0}, "week": {<same keys>},
-             "accounts": [<account block, meters without runs_out>]}],
+             "accounts": [<account block, meters without runs_out; "key": "acct:<uuid>", "folders": []>]}],
  "statusline": {"/abs/.claude": {"enabled": false, "capture_at": "ISO|null"}},
  "dashboard": "/abs/dashboard.html|null",
  "share": {"written_at": "ISO|null", "error": "text|null"},
  "notes": ["skipped Lee@mac-c3d4.json: report_version 1"]}
 ```
-Rules: `accounts` sorted by `number`. Every number on screen has an age source: meter `read_at`, `totals.as_of`, `session_share.as_of`, person `generated`. Golden copy: `tests/fixtures/feed-v2.json` (T1), decoded by S1 tests and rendered by D2 tests.
+Rules: `accounts` sorted by `number`. A person's account blocks come from their shared report, which never carries a folder path: `key` is `"acct:<uuid>"` and `folders` is `[]`. Every number on screen has an age source: meter `read_at`, `totals.as_of`, `session_share.as_of`, person `generated`. Golden copy: `tests/fixtures/feed-v2.json` (T1), decoded by S1 tests and rendered by D2 tests.

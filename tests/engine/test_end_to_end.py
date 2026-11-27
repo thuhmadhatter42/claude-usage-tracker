@@ -264,8 +264,11 @@ class EndToEnd(unittest.TestCase):
         with support.FakeUsageServer([(200, {}, reply(37, 52))]) as srv:
             r = self.engine("share", "--reports", str(reports), "--user", "Sam", url=srv.url)
             self.assertEqual(r.returncode, 0, r.stderr)
-        rep = json.loads(next(reports.glob("Sam@*.json")).read_text())
+        text = next(reports.glob("Sam@*.json")).read_text()
+        self.assertNotIn(str(self.h.home), text)                         # review-security 2: no home paths
+        rep = json.loads(text)
         self.assertEqual(list(rep["live"]), ["u-1"])
+        self.assertEqual((rep["live"]["u-1"]["key"], rep["live"]["u-1"]["folders"]), ("acct:u-1", []))
         self.assertEqual(rep["live"]["u-1"]["email"], "sam@example.com")
         self.assertEqual([m["id"] for m in rep["live"]["u-1"]["meters"]][:2], ["session", "weekly"])
         r = self.engine("dashboard", "--reports", str(reports), "--out", str(page))

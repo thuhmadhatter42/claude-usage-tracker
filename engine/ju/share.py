@@ -12,7 +12,6 @@ A report that cannot be trusted is skipped and named in `notes`; nothing here de
 belongs to anyone else, and a missing shared folder is an error (R-119)."""
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import re
@@ -74,10 +73,6 @@ def _tool_version() -> str:
     return text
 
 
-def _hash8(key: str) -> str:
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
-
-
 # ---------------------------------------------------------------- building my report
 
 def _entry(t: ledger_query.Totals) -> dict:
@@ -110,9 +105,8 @@ def build_report(conn, cfg: Config, live: dict, pricing, projects: bool, *,
     idents = {k: v for k, v in cfg.identities.items()
               if isinstance(v, dict) and isinstance(v.get("uuid"), str) and isinstance(v.get("email"), str)}
     uuid_of = {k: v["uuid"] for k, v in idents.items()}
-    accts = sorted(({"key_hash": _hash8(k), "number": accounts_mod.number_for(cfg, k),
-                     "email": v["email"], "uuid": v["uuid"]} for k, v in idents.items()),
-                   key=lambda a: (a["number"], a["key_hash"]))
+    accts = sorted(({"number": accounts_mod.number_for(cfg, k), "email": v["email"], "uuid": v["uuid"]}
+                    for k, v in idents.items()), key=lambda a: (a["number"], a["uuid"]))
 
     since = (now.astimezone().date() - timedelta(days=DAYS_KEPT - 1)).isoformat()
     rows_ = ledger_query.rows(conn, since)
@@ -156,10 +150,18 @@ def build_report(conn, cfg: Config, live: dict, pricing, projects: bool, *,
 
     report = {"report_version": REPORT_VERSION, "user": user, "host": host, "install_id": install,
               "tool_version": _tool_version(), "generated": generated, "accounts": accts,
-              "live": json.loads(json.dumps(live)), "days": days, "blocks": blocks,
+              "live": {u: _shareable(u, b) for u, b in live.items()}, "days": days, "blocks": blocks,
               "session_share": json.loads(json.dumps(shares))}
     _validate_v3(report)                                            # what I write is what I would accept
     return report
+
+
+def _shareable(uuid: str, block: dict) -> dict:
+    """An account block as it may leave this Mac: named by its account id, never by a folder path
+    (a home path names the login; review-security 2, J's call). The feed keeps the real ones."""
+    b = json.loads(json.dumps(block))
+    b["key"], b["folders"] = "acct:" + uuid, []
+    return b
 
 
 def write_report(directory, report: dict, cfg: Config) -> Tuple[Path, List[str]]:
@@ -416,9 +418,9 @@ def _validate_v3(raw) -> None:
     if not isinstance(raw["accounts"], list):
         raise _Bad("accounts must be a list")
     for a in raw["accounts"]:
-        if not (isinstance(a, dict) and all(isinstance(a.get(k), str) and a[k] for k in ("key_hash", "email", "uuid"))
+        if not (isinstance(a, dict) and all(isinstance(a.get(k), str) and a[k] for k in ("email", "uuid"))
                 and _is_int(a.get("number"))):
-            raise _Bad("accounts: each needs key_hash, number, email and uuid")
+            raise _Bad("accounts: each needs number, email and uuid")
     if not isinstance(raw["live"], dict):
         raise _Bad("live must be an object of account blocks")
     for u, b in raw["live"].items():
@@ -510,7 +512,7 @@ def _label_accounts(raw: dict) -> Tuple[List[dict], Dict[str, List[dict]]]:
                            "calls": b.get("calls", 0) if _is_int(b.get("calls", 0)) else 0, "usd": b.get("cost", 0)})
         if label in ids:
             blocks.setdefault(ids[label], []).extend(mapped)
-    accounts = [{"key_hash": "", "number": i + 1, "email": label if "@" in label else "", "uuid": u}
+    accounts = [{"number": i + 1, "email": label if "@" in label else "", "uuid": u}
                 for i, (label, u) in enumerate(sorted(ids.items()))]
     return accounts, blocks
 

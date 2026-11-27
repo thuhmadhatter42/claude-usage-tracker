@@ -46,7 +46,7 @@ def peer(user="Lee", host="lee-mac", install="c3d4", uuids=(UUID_A,), generated=
          live=None, **over):
     r = {"report_version": 3, "user": user, "host": host, "install_id": install, "tool_version": "0.2.0",
          "generated": iso(generated),
-         "accounts": [{"key_hash": "abcd1234", "number": i + 1, "email": f"{user}@x.test", "uuid": u}
+         "accounts": [{"number": i + 1, "email": f"{user}@x.test", "uuid": u}
                       for i, u in enumerate(uuids)],
          "live": live if live is not None else {},
          "days": days if days is not None else {"2026-11-26": day_entry()},
@@ -163,7 +163,7 @@ class BuildTests(FolderCase):
         self.assertEqual(r["tool_version"], (Path(__file__).resolve().parents[2] / "VERSION").read_text().strip())
         self.assertEqual(parse_iso(r["generated"]), NOW)
         self.assertEqual([a["number"] for a in r["accounts"]], [1, 3])
-        self.assertEqual(r["accounts"][0]["key_hash"], hashlib.sha256(self.folder_a.encode()).hexdigest()[:8])
+        self.assertNotIn("key_hash", r["accounts"][0])            # a path hash is guessable: never shared
         self.assertEqual(r["accounts"][0]["uuid"], UUID_A)
         day = r["days"]["2026-11-26"]
         self.assertEqual((day["output"], day["calls"], day["usd"]), (1_000_000, 1, 25.0))
@@ -212,6 +212,27 @@ class BuildTests(FolderCase):
         r = self.build(live=live, session_share={UUID_A: ss})
         self.assertEqual(r["live"][UUID_A]["meters"], [])
         self.assertEqual(r["session_share"], {UUID_A: ss})
+
+    def test_no_home_paths_leave_this_mac(self):
+        """Review-security 2 (J approved): what this Mac writes to the shared folder names accounts by
+        uuid only. Each live block's key becomes acct:<uuid>, its folders [], and no path or path
+        hash is left anywhere in the report."""
+        home = str(Path(self.folder_a).parent)
+        live = {UUID_A: acct_block(meters=[])}
+        live[UUID_A]["key"], live[UUID_A]["folders"] = self.folder_a, [self.folder_a, self.folder_b]
+        r = self.build(live=live)
+        self.assertEqual(r["live"][UUID_A]["key"], "acct:" + UUID_A)
+        self.assertEqual(r["live"][UUID_A]["folders"], [])
+        self.assertEqual(live[UUID_A]["key"], self.folder_a)       # the caller's feed block is untouched
+        text = json.dumps(r)
+        self.assertNotIn(home, text)
+        for f in (self.folder_a, self.folder_b):
+            self.assertNotIn(f, text)
+            self.assertNotIn(hashlib.sha256(f.encode()).hexdigest()[:8], text)
+        self.put("Sam@mac-a1b2.json", r)
+        reports, notes = share.load_reports(self.dir, "zzzz")
+        self.assertEqual((len(reports), notes), (1, []))
+        self.assertEqual(share.people(reports, NOW)[0].accounts[0]["key"], "acct:" + UUID_A)
 
     def test_live_must_be_object_of_objects(self):
         with self.assertRaises(ValueError):

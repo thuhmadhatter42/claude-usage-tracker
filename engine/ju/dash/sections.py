@@ -4,7 +4,7 @@ function `(model) -> str`, testable alone (R-136).
 Input: `share.Report` objects exactly as `share.load_reports` returns them (E20), and the people
 are E20's `share.people()` (RULING 35: one owner of "one person"; D2 only lays them out):
   user, host, install_id, generated (aware datetime), legacy (no account ids: counted, never split),
-  accounts [{key_hash, number, email, uuid}], live {uuid: feed §1.7 account block},
+  accounts [{number, email, uuid}], live {uuid: feed §1.7 account block, key acct:<uuid>, folders []},
   days {YYYY-MM-DD: {input, cache_5m, cache_1h, cache_read, output, calls, usd, unpriced,
         models {model id: {<COLS>, tokens, calls, usd}}, accounts {uuid: {tokens, usd}},
         projects {name: {tokens, usd}}}},
