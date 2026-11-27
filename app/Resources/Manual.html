@@ -1,0 +1,42 @@
+<!doctype html><meta charset="utf-8"><title>jusage Manual</title>
+<body style="background:#1e1e1e;color:#eee;font:15px/1.5 Helvetica Neue,sans-serif;max-width:42em;margin:3em auto;padding:0 1em">
+<h1>jusage</h1>
+<p>jusage sits in the menu bar and shows how much of your Claude plan you have used: the 5-hour session and the 7-day
+week, for every Claude Code account on this Mac. Click it for the panel.</p>
+
+<h2>The menu bar</h2>
+<p>The title shows the meters you chose in Settings. Hover it for each account's detail. A grey title means the reading
+is old (15 minutes or more) or a reset is due. Right-click the icon for About, Check for Updates, Quick Keys, Send Report,
+this Manual, What's New, Run Doctor, Licenses, Uninstall and Quit.</p>
+
+<h2>Colours</h2>
+<p>Green: you are keeping up with the clock or ahead of it. Amber: you have used more than the share of the period that has
+gone. Red: 97% or more used. The forecast never colours anything.</p>
+
+<h2>Settings</h2>
+<p>Check every (15 seconds to 10 minutes), the status-line backup per account, the menu bar tags, colour by the worst meter,
+the accent colour, Open at login.</p>
+<p><b>Status-line backup.</b> When it is on, jusage reads your usage from Claude Code's own replies and asks Anthropic only
+when no reply has arrived for a while. Turning it off puts your original Claude Code status line back exactly.</p>
+
+<h2>Quick Keys</h2>
+<p>&#8679;&#8963;K lists every shortcut. Click one and press the new keys. Refresh is &#8984;R, Open Dashboard &#8984;D, Previous
+and Next Month &#8997;&#8592; and &#8997;&#8594;. Settings (&#8984;,) and Quit (&#8984;Q) are fixed.</p>
+
+<h2>Updates</h2>
+<p>jusage checks for a new version once each time it opens, and every day while it runs. App menu &rsaquo; Check for
+Updates&hellip; checks right now.</p>
+
+<h2>Reporting a problem</h2>
+<p>Help &rsaquo; Send Report&hellip; opens Mail with the log attached, addressed to contact@fourletterrecords.com. Help
+&rsaquo; Run Doctor shows what is healthy and what needs fixing; it never prints a login or a key.</p>
+
+<h2>Uninstalling</h2>
+<p>Right-click the icon &rsaquo; Uninstall jusage&hellip; First jusage gives Claude Code its original status line back,
+switches off Open at login and removes its line from your shell files. Then everything goes to the Trash, never deleted
+outright. "Keep my settings" leaves <code>~/.claude-usage</code> (your usage history and settings) in place.</p>
+<p>In Terminal, <code>jusage uninstall</code> restores the status line and moves jusage to the Trash. The script on its
+own does only the moving, so restore the status line first:</p>
+<p><code>jusage statusline off --all</code><br>
+<code>sh "/Applications/jusage.app/Contents/Resources/uninstall.sh"</code></p>
+</body>

@@ -1,0 +1,27 @@
+# uninstall.manifest: everything jusage puts on a Mac, and nothing else.
+# The per-app file of the Uninstall module (house-kit). `user` and `data` paths are inside the home folder and
+# written without the leading ~/.
+#
+# NOT listed here, because the script only moves paths to the Trash (see JusageUninstall.swift, which runs
+# BEFORE this script; the `jusage uninstall` command does the first step itself):
+#   1. `jusage statusline off --all`  (Claude Code's own status-line command is restored first)
+#   2. the login item is switched off
+#   3. the `alias jusage=` lines in ~/.zshrc and ~/.bashrc are removed (the original file goes to the Trash)
+
+name     jusage
+
+# Kept when the user ticks "Keep my settings": the usage ledger, settings, live readings, the install id.
+data     .claude-usage
+data     Library/Preferences/com.goatdguild.jusage.plist
+
+# Always removed (no user data):
+user     Library/Logs/jusage
+user     Library/Caches/com.goatdguild.jusage
+user     Library/HTTPStorages/com.goatdguild.jusage
+user     Library/Saved Application State/com.goatdguild.jusage.savedState
+
+# The per-user copy of the app, if there is one (a git install builds into ~/Applications as a fallback):
+user     Applications/jusage.app
+
+# The app itself, moved last:
+app      /Applications/jusage.app
