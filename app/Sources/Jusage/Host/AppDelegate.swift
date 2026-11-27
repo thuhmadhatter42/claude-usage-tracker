@@ -183,6 +183,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Uninstall's first step: the engine restores every status-line original (`statusline off --all`).
     private func statusLineOff() -> (Int32, String) {
+        // Bring-up failed (no engine): uninstalling must still work. The engine's own record says whether a
+        // status line was ever wrapped; if none was, there is nothing to restore.
+        if engine == nil {
+            let facts = try? BringUp.bundleFacts(.main).get()
+            return JusageUninstall.statusLineOffWithoutEngine(stateDir: facts?.stateDir, home: NSHomeDirectory())
+        }
         switch runSync(["statusline", "off", "--all"], timeout: 30) {
         case .ok(let data): return (0, String(decoding: data, as: UTF8.self))
         case .failed(let line, let code): return (code, line)
