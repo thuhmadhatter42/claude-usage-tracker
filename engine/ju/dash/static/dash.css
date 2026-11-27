@@ -1,0 +1,82 @@
+/* The dashboard's stylesheet. No colour of its own: every colour is a token from themes.json
+   (theme_css.py), the house accent (accent.js) or a mix of those. */
+:root{--base:var(--bg);--panel:var(--sf);--panel-deep:var(--sf2);--text-hi:var(--ink);--text-lo:var(--mut);--text-faint:var(--mut);
+  --white-line:color-mix(in srgb,var(--ink) 70%,transparent)}
+*{box-sizing:border-box}::selection{background:var(--sel)}[hidden]{display:none!important}
+body{margin:0;padding:28px 20px 56px;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,"SF Pro Text",system-ui,sans-serif;font-feature-settings:"tnum" 1;-webkit-font-smoothing:antialiased}
+main{max-width:1120px;margin:0 auto}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+h1{font-size:20px;font-weight:600;letter-spacing:-.01em;margin:0;flex:1}
+.head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.head time{font-weight:600}
+h2{font-size:13px;font-weight:600;color:var(--ink2);margin:30px 0 8px}
+.fatal{color:var(--hot);font-weight:600}
+.panel{background:var(--sf);border:1px solid var(--line);border-radius:12px}
+.today{padding:16px 20px 14px;margin-bottom:12px}
+.who{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}.who b{font-weight:600}.who span{color:var(--mut);font-size:12.5px}
+.sub{color:var(--ink2);font-size:12.5px;margin:-4px 0 12px}
+.acct{margin-top:14px}.acct:first-of-type{margin-top:0}
+.acct .h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.acct .h b{font-weight:600;font-size:13.5px}.acct .h span{color:var(--mut);font-size:12px}
+.acct.legacy .h span{color:var(--ink2)}
+.aerr{color:var(--warn);font-size:12px;margin-top:4px}
+.ss{color:var(--mut);font-size:12px;margin-top:6px}
+.stats{display:flex;flex-wrap:wrap;gap:6px 34px;align-items:flex-end}
+.stat{display:flex;flex-direction:column;gap:1px;min-width:88px}
+.stat .v{font-size:26px;font-weight:600;line-height:1.1;letter-spacing:-.02em}.stat .v small{font-size:13px;font-weight:500;color:var(--ink2);margin-left:5px;letter-spacing:0}
+.stat .l{font-size:12px;color:var(--mut)}
+.stat.sm .v{font-size:17px}
+.strip{display:flex;flex-wrap:wrap;gap:6px 34px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.strip .stat .v{font-size:16px}
+/* stale: 15 minutes after the reading (or the report), on the reader's clock */
+.person.stale .v,.person.stale .v small,.ss.stale{color:var(--mut)}
+.meters{margin-top:6px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));gap:8px 32px}
+.meter{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;align-items:center;font-size:12px}
+.meter .n{color:var(--ink2);white-space:nowrap}.meter .n b{color:var(--ink);font-weight:600;font-size:13px;margin-right:6px;display:inline-block;min-width:34px}
+.meter .r{color:var(--mut);grid-column:2}
+/* three meanings: lit = used, dim = forecast at reset, the white line = share of the period gone */
+.bar{position:relative;display:flex;gap:2px;height:12px}.bar i{flex:1;background:var(--seg);border-radius:1.5px}
+.meter[data-state=green] .bar i.u{background:var(--ok)}
+.meter[data-state=amber] .bar i.u{background:var(--warn)}
+.meter[data-state=red] .bar i.u{background:var(--hot)}
+.meter[data-state=green] .bar i.f{background:color-mix(in srgb,var(--ok) 35%,var(--seg))}
+.meter[data-state=amber] .bar i.f{background:color-mix(in srgb,var(--warn) 35%,var(--seg))}
+.meter[data-state=red] .bar i.f{background:color-mix(in srgb,var(--hot) 35%,var(--seg))}
+.tick{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;border-radius:1px;background:var(--white-line)}
+.meter[data-state=red] .pct{color:var(--hot);text-shadow:0 0 calc(6px * var(--glow-radius-scale)) color-mix(in srgb,var(--hot) calc(60% * var(--glow-opacity-scale)),transparent)}
+/* grey: fills grey, no forecast, no white line, no state colour; the last value stays */
+.meter.stale .bar i.u,.meter.reset-due .bar i.u,.meter[data-state=none] .bar i.u{background:var(--mut)}
+.meter.stale .bar i.f,.meter.reset-due .bar i.f,.meter[data-state=none] .bar i.f{background:var(--seg)}
+.meter.stale .tick,.meter.reset-due .tick{display:none}
+.meter.stale .pct,.meter.reset-due .pct{color:var(--mut);text-shadow:none}
+code{font:12px ui-monospace,Menlo,monospace;background:var(--sf2);padding:1px 5px;border-radius:4px}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr));gap:12px}
+.chart{padding:12px 12px 8px;position:relative}
+.chart h3{font-size:12.5px;font-weight:600;color:var(--ink2);margin:0 0 6px 4px}
+.chart svg{width:100%;height:auto;display:block}
+.leg{display:flex;flex-wrap:wrap;gap:4px 14px;color:var(--ink2);font-size:12px;margin:6px 4px 0}.leg i,.tip i,i.sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.tip{position:absolute;pointer-events:none;background:var(--sf2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;box-shadow:0 6px 20px -6px rgba(0,0,0,.35);display:none;min-width:150px;z-index:2}
+.tip b{display:block;margin-bottom:4px}.tip .r{display:flex;justify-content:space-between;gap:12px}
+.bar-hit:hover rect.hl,.bar-hit:focus rect.hl{fill:var(--sel);opacity:.35}.bar-hit:focus{outline:none}
+table{border-collapse:separate;border-spacing:0;width:100%;background:var(--sf);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:13px}
+th,td{padding:6px 12px;text-align:right;border-top:1px solid var(--line);white-space:nowrap}
+tr:first-child th{border-top:0}th{color:var(--mut);font-weight:500;font-size:12px}td:first-child,th:first-child{text-align:left}
+td.d span{color:var(--mut);margin-left:5px}
+tr.tot td{font-weight:600;background:var(--sf2)}
+.months{display:grid;grid-template-columns:1fr;gap:14px}@media(min-width:1260px){.months{grid-template-columns:1fr 1fr}}
+.month h3{font-size:12.5px;font-weight:600;color:var(--ink2);margin:0 0 6px 4px}
+.wrap{overflow-x:auto}.note{color:var(--mut);font-size:12px;margin-top:28px;line-height:1.55;max-width:72ch}
+.notes{margin:8px 0 0;padding-left:18px}
+.foot{color:var(--mut);font-size:11.5px;margin-top:24px}
+/* Customize drawer */
+.cfg{position:fixed;top:0;right:0;bottom:0;width:min(340px,100vw);background:var(--sf);border-left:1px solid var(--line);padding:18px 20px 28px;overflow-y:auto;z-index:5;box-shadow:-12px 0 40px -20px rgba(0,0,0,.4)}
+.cfg-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}.cfg-h b{font-size:15px}
+.cfg h4{font-size:12px;font-weight:600;color:var(--mut);margin:18px 0 6px}
+.cfg label{display:flex;align-items:center;gap:8px;font-size:13px;padding:4px 0;cursor:pointer}.cfg input{accent-color:var(--accent)}
+.themes{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.th{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;font-size:12.5px;color:var(--ink);cursor:pointer;background:var(--sf2)}
+.th.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.th i{width:22px;height:14px;border-radius:4px;border:1px solid rgba(0,0,0,.15);position:relative;flex:none}.th i:after{content:"";position:absolute;left:4px;bottom:3px;width:10px;height:3px;border-radius:2px;background:var(--dot)}
+.cfg .small{color:var(--mut);font-size:11.5px;margin-top:20px}
+.hk-accent .hk-swatch{border-color:var(--line)}
+@media(max-width:600px){body{padding:20px 16px 48px}.stat .v{font-size:22px}}

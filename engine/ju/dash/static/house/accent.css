@@ -1,0 +1,9 @@
+/* The accent picker drawn by accent.js (HouseAccent.mountPicker). Needs glow.css for the variables. */
+.hk-accent{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font:13px/1.2 var(--face-font);color:var(--text-hi);}
+.hk-swatch{width:22px;height:22px;border-radius:50%;border:1px solid rgba(255,255,255,.15);padding:0;cursor:pointer;}
+.hk-swatch.on{border:2px solid rgba(255,255,255,.95);}
+.hk-swatch:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.hk-custom{position:relative;overflow:hidden;display:inline-block;}
+.hk-custom input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;}
+.hk-hc{display:flex;align-items:center;gap:6px;color:var(--text-lo);cursor:pointer;}
+.hk-clamp{flex-basis:100%;min-height:1.2em;font-size:11px;color:var(--accent);}

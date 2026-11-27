@@ -1,0 +1,27 @@
+/* The Quick Keys window drawn by quickkeys.js. Needs glow.css for the variables and .hk-btn. */
+.hk-qk-overlay{position:fixed;inset:0;z-index:9000;display:none;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.55);font-family:var(--face-font);}
+.hk-qk-overlay.show{display:flex;}
+.hk-qk-panel{width:min(460px,92vw);max-height:min(560px,88vh);display:flex;flex-direction:column;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;color:var(--text-hi);
+  box-shadow:0 18px 60px rgba(0,0,0,.7);}
+.hk-qk-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px;}
+.hk-qk-title{font-size:12px;font-weight:700;letter-spacing:.12em;}
+.hk-qk-x{background:none;border:0;color:var(--text-lo);font-size:12px;cursor:pointer;padding:4px;}
+.hk-qk-clash{display:flex;align-items:center;gap:10px;padding:8px 16px;background:rgba(var(--accent-rgb),.08);}
+.hk-qk-clash-msg{flex:1;font-size:13px;color:var(--accent);}
+.hk-qk-list{flex:1;overflow-y:auto;padding:0 16px 12px;}
+.hk-qk-group{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--text-lo);padding:12px 0 4px;}
+.hk-qk-row{display:flex;align-items:center;gap:8px;padding:3px 0;}
+.hk-qk-name{flex:1;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.hk-qk-chip{min-width:84px;padding:4px 8px;border-radius:5px;cursor:pointer;
+  font:600 12px/1.2 ui-monospace,Menlo,monospace;color:var(--accent);
+  background:rgba(var(--accent-rgb),.08);border:1px solid rgba(var(--accent-rgb),.6);}
+.hk-qk-chip.none{color:var(--text-lo);}
+.hk-qk-chip.locked{color:var(--text-lo);background:none;border-color:var(--line);cursor:default;}
+.hk-qk-chip.listening{color:var(--accent-ink);background:var(--accent);box-shadow:var(--glow-box);}
+.hk-qk-chip:focus-visible,.hk-qk-clear:focus-visible,.hk-qk-x:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.hk-qk-clear{background:none;border:0;color:var(--text-lo);font-size:11px;cursor:pointer;padding:4px;}
+.hk-qk-clear.gone{visibility:hidden;}
+.hk-qk-foot{display:flex;align-items:center;padding:12px 16px;border-top:1px solid var(--line);}
+.hk-qk-sp{flex:1;}
