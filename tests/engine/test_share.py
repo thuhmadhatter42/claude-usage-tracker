@@ -451,6 +451,22 @@ class PeopleTests(FolderCase):
         json.dumps(f)
 
 
+def v039(user="Ari", host="ari-mac", install="9f9f", version="0.1.39", labels=None, ids=None, blocks=None):
+    """A report the way 0.1.39 writes it: no report_version, blocks keyed by account label (the
+    account's email, else '<user> #n'), account_ids label -> claude.ai uuid, spend under `cost`."""
+    labels = labels if labels is not None else ["ari@x.test"]
+    ids = ids if ids is not None else {"ari@x.test": UUID_A}
+    return {"user": user, "host": host, "install_id": install, "tool_version": version,
+            "generated": "2026-11-26T17:55:00+00:00", "accounts": labels, "account_ids": ids,
+            "live": {labels[0]: {"meters": []}},
+            "days": {"2026-11-26": {"input": 0, "cache_5m": 0, "cache_1h": 0, "cache_read": 0, "output": 700,
+                                    "calls": 4, "cost": 3.0, "unpriced": 0, "models": {}, "accounts": {},
+                                    "projects": {}}},
+            "blocks": blocks if blocks is not None else {labels[0]: [
+                {"start": "2026-11-26T08:00-08:00", "end": "2026-11-26T13:00-08:00", "tokens": 5, "calls": 2,
+                 "cost": 20.0}]}}
+
+
 class SplitTests(FolderCase):
     RESET = datetime(2026, 11, 26, 20, 0, 0, tzinfo=UTC)
 
@@ -536,6 +552,41 @@ class SplitTests(FolderCase):
         # alone: the legacy peer is named, no number invented for it
         s2 = self.split(self.meter(), [], reports)
         self.assertEqual((s2.parts, s2.missing), ([], ["Old"]))
+
+    def test_0_1_39_report_splits_through_its_account_ids(self):
+        # 08:00-08:00 is 16:00Z: window 16:00..21:00Z, now 18:00Z, period 15:00..20:00Z: 2h of 2h run = full
+        own = [block(datetime(2026, 11, 26, 16, 0, tzinfo=UTC), usd=20.0)]
+        reports = self.reports(**{"Ari@ari-mac-9f9f.json": v039()})
+        self.assertFalse(reports[0].legacy)
+        s = self.split(self.meter(), own, reports)
+        parts = {p.user: p for p in s.parts}
+        self.assertEqual(parts["Ari"].usd, 20.0)
+        self.assertEqual(parts["Ari"].install_id, "9f9f")
+        self.assertEqual(parts["Sam"].share, 0.5)
+        self.assertEqual(s.missing, [])
+
+    def test_0_1_39_other_account_not_counted_and_not_missing(self):
+        reports = self.reports(**{"Ari@ari-mac-9f9f.json": v039(ids={"ari@x.test": UUID_B})})
+        self.assertIsNone(self.split(self.meter(), [], reports))
+
+    def test_0_1_39_label_with_no_uuid_is_missing(self):
+        r = v039(labels=["Ari #1"], ids={}, blocks={"Ari #1": [
+            {"start": "2026-11-26T08:00-08:00", "end": "2026-11-26T13:00-08:00", "tokens": 5, "calls": 2, "cost": 20.0}]})
+        reports = self.reports(**{"Ari@ari-mac-9f9f.json": r})
+        self.assertTrue(reports[0].legacy)
+        s = self.split(self.meter(), [], reports)
+        self.assertEqual((s.parts, s.missing), ([], ["Ari"]))
+
+    def test_0_1_22_is_the_first_splittable_version(self):
+        reports = self.reports(**{"Ari@ari-mac-9f9f.json": v039(version="0.1.22"),
+                                  "Old@old-mac-1111.json": v039(user="Old", install="1111", version="0.1.21")})
+        by = {r.user: r.legacy for r in reports}
+        self.assertEqual(by, {"Ari": False, "Old": True})
+
+    def test_0_1_39_bad_block_skipped(self):
+        reports, notes = share.load_reports(self.dir, "zzzz") if self.put("A@m-1.json", v039(blocks=[])) is None else (0, 0)
+        self.assertEqual(reports, [])
+        self.assertIn("blocks", notes[0])
 
     def test_two_macs_of_one_person_are_one_part(self):
         own = [block(datetime(2026, 11, 26, 15, 0, tzinfo=UTC), usd=10.0)]

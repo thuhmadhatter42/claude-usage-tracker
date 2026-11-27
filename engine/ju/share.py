@@ -31,6 +31,7 @@ from ju.timeutil import parse_iso
 
 DAYS_KEPT = 90
 BLOCKS_KEPT = 50
+SPLITTABLE_FROM = (0, 1, 22)         # first version that wrote account ids (R-122)
 PROJECTS_PER_DAY = 10
 WEEK_DAYS = 7
 _DAY = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
@@ -361,8 +362,41 @@ def _parse_report(name: str, raw) -> Report:
         raise _Bad("not a jusage report (no readable tool_version)") from None
     gen = _check_time("generated", raw.get("generated"))
     inst = raw.get("install_id")
-    return Report(raw["user"], raw["host"], inst if isinstance(inst, str) and inst else None,
-                  raw["tool_version"], gen, [], {}, _legacy_days(raw["days"]), {}, {}, True, name)
+    inst = inst if isinstance(inst, str) and inst else None
+    days = _legacy_days(raw["days"])
+    accounts, blocks = _label_accounts(raw) if version_tuple(raw["tool_version"]) >= SPLITTABLE_FROM else ([], {})
+    return Report(raw["user"], raw["host"], inst, raw["tool_version"], gen, accounts, {}, days, blocks, {},
+                  not accounts, name)
+
+
+def _label_accounts(raw: dict) -> Tuple[List[dict], Dict[str, List[dict]]]:
+    """A 0.1.22+ report before report_version: its blocks are keyed by account label (the email,
+    else '<user> #n') and `account_ids` maps label -> claude.ai uuid. A label with a uuid is mapped
+    onto the v3 shape (uuid-keyed blocks, `cost` -> `usd`); a label without one cannot be matched to
+    anyone's account and is dropped. No label mapped at all -> ([], {}): the report stays legacy."""
+    ids = raw.get("account_ids")
+    ids = {k: v for k, v in ids.items() if isinstance(k, str) and isinstance(v, str) and v} if isinstance(ids, dict) else {}
+    raw_blocks = raw.get("blocks", {})
+    if not isinstance(raw_blocks, dict):
+        raise _Bad("blocks must be an object keyed by account label")
+    blocks: Dict[str, List[dict]] = {}
+    for label, bl in raw_blocks.items():
+        if not isinstance(bl, list):
+            raise _Bad(f"blocks: {label} must be a list")
+        mapped = []
+        for b in bl:
+            if not isinstance(b, dict):
+                raise _Bad(f"blocks: {label} holds something that is not a window")
+            start, end = _check_time("blocks start", b.get("start")), _check_time("blocks end", b.get("end"))
+            if end <= start or not _is_num(b.get("cost", 0)):
+                raise _Bad("blocks: a window is out of order or its cost is not a number")
+            mapped.append({"start": b["start"], "end": b["end"], "tokens": b.get("tokens", 0) if _is_int(b.get("tokens", 0)) else 0,
+                           "calls": b.get("calls", 0) if _is_int(b.get("calls", 0)) else 0, "usd": b.get("cost", 0)})
+        if label in ids:
+            blocks.setdefault(ids[label], []).extend(mapped)
+    accounts = [{"key_hash": "", "number": i + 1, "email": label if "@" in label else "", "uuid": u}
+                for i, (label, u) in enumerate(sorted(ids.items()))]
+    return accounts, blocks
 
 
 def load_reports(directory, own_install: str) -> Tuple[List[Report], List[str]]:
