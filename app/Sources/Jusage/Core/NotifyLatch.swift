@@ -28,6 +28,18 @@ enum NotifyLatch {
     static let minSameCycle: TimeInterval = 300
     private static let identityKinds: Set<String> = ["identity_changed", "identity_foreign_reset"]
 
+    /// The latch to save once delivery has answered: `new`, except that every note which was not delivered keeps
+    /// its old latch entry, so the crossing fires again on the next run instead of being recorded as sent.
+    static func committed(old: Latch, new: Latch, notes: [Note], delivered: [String]) -> Latch {
+        var out = new
+        let ok = Set(delivered)
+        for n in notes where !ok.contains(n.id) {
+            let key = LatchKey(folderKey: n.folderKey, meterId: n.meterId, kind: n.kind)
+            out[key] = old[key]
+        }
+        return out
+    }
+
     static func evaluate(feed: Feed, settings: AppSettings, latch: Latch, now: Date,
                          hour12: Bool = Fmt.systemHour12, timeZone: TimeZone = .current) -> ([Note], Latch) {
         var next = latch

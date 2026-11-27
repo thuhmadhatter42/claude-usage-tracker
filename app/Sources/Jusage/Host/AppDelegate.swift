@@ -140,8 +140,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let (notes, latch) = NotifyLatch.evaluate(feed: feed, settings: settings.settings,
                                                   latch: settings.settings.notificationLatch, now: now)
-        if latch != settings.settings.notificationLatch { settings.update { $0.notificationLatch = latch } }
-        notifier?.post(notes)
+        let old = settings.settings.notificationLatch
+        guard let notifier else { return }   // no engine, no notifier: nothing was delivered, nothing is recorded
+        // A crossing is recorded as sent only once the system accepted its notification.
+        notifier.post(notes) { [weak self] delivered in
+            Task { @MainActor in
+                guard let self else { return }
+                let kept = NotifyLatch.committed(old: old, new: latch, notes: notes, delivered: delivered)
+                if kept != self.settings.settings.notificationLatch { self.settings.update { $0.notificationLatch = kept } }
+            }
+        }
     }
 
     private func runSync(_ args: [String], timeout: TimeInterval) -> RunResult {

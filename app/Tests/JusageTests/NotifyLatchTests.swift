@@ -165,4 +165,19 @@ final class NotifyLatchTests: XCTestCase {
         (notes, _) = eval(try nilReset(10), latch)
         XCTAssertTrue(notes.isEmpty, "no cycle key, so no reset note")
     }
+
+    func testCrossingIsRecordedOnlyForNotesThatWereDelivered() throws {
+        let start = Latch()
+        let (notes, after) = eval(try feed(pct: 98), start)
+        XCTAssertEqual(notes.map(\.kind), [.critical])
+        // Delivery failed: the latch goes back to what it was for that note, so the next run fires it again.
+        let kept = NotifyLatch.committed(old: start, new: after, notes: notes, delivered: [])
+        let key = LatchKey(folderKey: notes[0].folderKey, meterId: notes[0].meterId, kind: .critical)
+        XCTAssertNil(kept[key])
+        XCTAssertEqual(eval(try feed(pct: 98), kept).0.map(\.kind), [.critical])
+        // Delivered: recorded, no repeat.
+        let done = NotifyLatch.committed(old: start, new: after, notes: notes, delivered: [notes[0].id])
+        XCTAssertEqual(done, after)
+        XCTAssertTrue(eval(try feed(pct: 98), done).0.isEmpty)
+    }
 }
