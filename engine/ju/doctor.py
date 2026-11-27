@@ -153,7 +153,7 @@ def run(state, env: Mapping[str, str], *, store: LiveStore, now: Optional[dateti
             at = timeutil.parse_iso(cap["captured_at"])
             age = (now - at).total_seconds()
             cap_text = f"last capture {_ago(age)} ({timeutil.iso(at)})"
-            if enabled and age > STALE_AFTER_S:
+            if enabled and age >= STALE_AFTER_S:
                 warns.append("status-line capture older than 15 minutes")
         elif enabled:
             warns.append("status-line backup is on but nothing was captured")

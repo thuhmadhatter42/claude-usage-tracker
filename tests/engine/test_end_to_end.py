@@ -161,5 +161,34 @@ class EndToEnd(unittest.TestCase):
         self.assertIn(formats.tokens(1234 + 7), html)                     # today's tokens from the report's days
         self.assertNotIn("No reports yet", html)
 
+
+class Staleness(unittest.TestCase):
+    """RULING 33 / R-197: 899 s keeps its colour, 900 s is stale, in every engine owner and in the
+    dashboard (the app's StalenessTests and the page script's test_freshness.js pin the same edge,
+    and EndToEndDecodeTests checks the app against the feed's rules.stale_after_s)."""
+
+    def test_flips_at_exactly_900_seconds(self):
+        from ju import constants, pace as pace_mod, share
+        from ju.contracts import Meter
+        from ju.dash import meters as dash_meters
+        from ju.live_store import AccountLive
+        self.assertEqual(constants.STALE_AFTER_S, 900)
+        now = datetime(2026, 11, 26, 21, 40, tzinfo=timezone.utc)
+        m = Meter("session", "Session", 40.0, now + timedelta(hours=2), 18000)
+        rules = {"stale_after_s": 900, "red_at": 97, "warmup_e": 0.03, "read_every_s": 60}
+        for age, stale in ((899, False), (900, True)):
+            at = now - timedelta(seconds=age)
+            self.assertEqual(pace_mod.pace(m, now, read_at=at).state is None, stale, ("E17 pace", age))
+            self.assertEqual(AccountLive(fetched=at, data={}).is_stale(now), stale, ("E13 is_stale", age))
+            person = share.Person("Sam", [share.Report("Sam", "mac", "a1b2", "0.2.0", at, [], {}, {}, {}, {}, False, "x")],
+                                  False, frozenset(), {}, {}, [])
+            self.assertEqual(person.is_stale(now), stale, ("E20 Person.is_stale", age))
+            block = {"id": "session", "name": "Session", "pct": 40.0, "resets_at": timeutil.iso(now + timedelta(hours=2)),
+                     "read_at": timeutil.iso(at), "source": "service", "period_s": 18000, "disagree": False,
+                     "pace": {"e": 0.5, "landing": 80.0, "state": "green", "forecast": True, "runs_out": None,
+                              "reset_due": False, "words": "On pace"}, "split": None}
+            self.assertEqual("stale" in dash_meters.meter_html(block, now, rules).split(">", 1)[0], stale, ("D3", age))
+
+
 if __name__ == "__main__":
     unittest.main()

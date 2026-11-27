@@ -204,7 +204,8 @@ class TestLiveStore(LiveStoreCase):
         old = AccountLive(fetched=now - timedelta(seconds=901), data={"x": 1})
         self.assertTrue(old.is_stale(now))
         edge = AccountLive(fetched=now - timedelta(seconds=900), data={"x": 1})
-        self.assertFalse(edge.is_stale(now))
+        self.assertTrue(edge.is_stale(now))                   # RULING 33: >= 900 s
+        self.assertFalse(AccountLive(fetched=now - timedelta(seconds=899), data={"x": 1}).is_stale(now))
         nothing = AccountLive(error=ErrorInfo("login_missing", "No login", now))
         self.assertFalse(nothing.is_stale(now))   # no data: an error, not a stale number
 

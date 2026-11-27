@@ -292,6 +292,19 @@ class FeedFixtureTests(unittest.TestCase):
                     n += 1
         self.assertGreaterEqual(n, 5)
 
+    def test_words_are_what_the_engine_writes(self):
+        """RULING 34: the golden words are E17's own text at `generated`; a clock is never in them
+        (RULING 4: `{runs_out}` is the placeholder the app fills in)."""
+        from ju import pace as pace_mod
+        from ju.contracts import Meter
+        gen = timeutil.parse_iso(self.feed["generated"])
+        for a in self.feed["accounts"]:
+            for m in a["meters"]:
+                with self.subTest(f"{a['number']}/{m['id']}"):
+                    meter = Meter(m["id"], m["name"], m["pct"], timeutil.parse_iso(m["resets_at"]), m["period_s"])
+                    self.assertEqual(m["pace"]["words"], pace_mod.pace(meter, gen).words)
+                    self.assertNotRegex(m["pace"]["words"].replace("{runs_out}", ""), r"\d:\d\d")
+
     def test_covers_each_state_and_a_stale_reading(self):
         states = {m["pace"]["state"] for a in self.feed["accounts"] for m in a["meters"]}
         self.assertEqual(states, {"green", "amber", "red"})

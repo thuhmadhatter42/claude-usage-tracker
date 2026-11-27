@@ -474,7 +474,7 @@ class Person:
 
     def is_stale(self, now: datetime) -> bool:
         """Greys 15 minutes after the report's `generated` instant (R-121): the one staleness rule."""
-        return (now - self.generated).total_seconds() > STALE_AFTER_S
+        return (now - self.generated).total_seconds() >= STALE_AFTER_S
 
     def to_feed(self) -> dict:
         return {"install_id": self.install_id, "user": self.user, "host": self.host,

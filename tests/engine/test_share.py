@@ -417,8 +417,8 @@ class PeopleTests(FolderCase):
 
     def test_stale_after_15_minutes(self):
         p = share.people(self.load(**{"Lee@m-c3d4.json": peer(generated=NOW - timedelta(seconds=900))}), NOW)[0]
-        self.assertFalse(p.is_stale(NOW))
-        self.assertTrue(p.is_stale(NOW + timedelta(seconds=1)))
+        self.assertFalse(p.is_stale(NOW - timedelta(seconds=1)))   # 899 s
+        self.assertTrue(p.is_stale(NOW))                          # 900 s: RULING 33
         self.assertTrue(p.is_stale(NOW + timedelta(minutes=16)))
         fresh = share.people(self.load(**{"Lee@m-c3d4.json": peer(generated=NOW - timedelta(minutes=14))}), NOW)[0]
         self.assertFalse(fresh.is_stale(NOW))

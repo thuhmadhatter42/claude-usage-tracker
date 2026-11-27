@@ -65,12 +65,12 @@ class AccountLive:
 
     def is_stale(self, now: datetime) -> bool:
         """A number exists but cannot be trusted as current: the last attempt failed, or the
-        reading is older than STALE_AFTER_S. No data at all is an error, not a stale number."""
+        reading is STALE_AFTER_S old or more. No data at all is an error, not a stale number."""
         if self.data is None:
             return False
         if self.error is not None:
             return True
-        return self.fetched is None or (now - self.fetched).total_seconds() > STALE_AFTER_S
+        return self.fetched is None or (now - self.fetched).total_seconds() >= STALE_AFTER_S
 
 
 @dataclass
