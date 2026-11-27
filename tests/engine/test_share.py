@@ -46,7 +46,7 @@ def peer(user="Lee", host="lee-mac", install="c3d4", uuids=(UUID_A,), generated=
          live=None, **over):
     r = {"report_version": 3, "user": user, "host": host, "install_id": install, "tool_version": "0.2.0",
          "generated": iso(generated),
-         "accounts": [{"key_hash": "abcd1234", "number": i + 1, "email": f"{user}@x.test", "uuid": u}
+         "accounts": [{"number": i + 1, "email": f"{user}@x.test", "uuid": u}
                       for i, u in enumerate(uuids)],
          "live": live if live is not None else {},
          "days": days if days is not None else {"2026-11-26": day_entry()},
@@ -54,6 +54,18 @@ def peer(user="Lee", host="lee-mac", install="c3d4", uuids=(UUID_A,), generated=
          "session_share": {}}
     r.update(over)
     return r
+
+
+def acct_block(**kw):
+    """A full feed §1.7 account block (the dashboard fixtures' builder), for account A."""
+    from tests.engine.test_dash_fixtures import account
+    warning = kw.pop("warning", None)
+    return dict(account(uuid=UUID_A, **kw), warning=warning)
+
+
+def meter_block(mid, **kw):
+    from tests.engine.test_dash_fixtures import meter
+    return meter(mid, **kw)
 
 
 def legacy(user="Old", host="old-mac", version="0.1.21", days=None):
@@ -151,7 +163,7 @@ class BuildTests(FolderCase):
         self.assertEqual(r["tool_version"], (Path(__file__).resolve().parents[2] / "VERSION").read_text().strip())
         self.assertEqual(parse_iso(r["generated"]), NOW)
         self.assertEqual([a["number"] for a in r["accounts"]], [1, 3])
-        self.assertEqual(r["accounts"][0]["key_hash"], hashlib.sha256(self.folder_a.encode()).hexdigest()[:8])
+        self.assertNotIn("key_hash", r["accounts"][0])            # a path hash is guessable: never shared
         self.assertEqual(r["accounts"][0]["uuid"], UUID_A)
         day = r["days"]["2026-11-26"]
         self.assertEqual((day["output"], day["calls"], day["usd"]), (1_000_000, 1, 25.0))
@@ -195,10 +207,32 @@ class BuildTests(FolderCase):
         self.assertEqual(on["days"]["2026-11-26"]["projects"]["secret-project"]["usd"], 25.0)
 
     def test_live_and_session_share_pass_through(self):
-        live = {UUID_A: {"number": 1, "meters": []}}
-        r = self.build(live=live, session_share={UUID_A: {"current": 4.0}})
-        self.assertEqual(r["live"], live)
-        self.assertEqual(r["session_share"], {UUID_A: {"current": 4.0}})
+        live = {UUID_A: acct_block(meters=[])}
+        ss = {"current": 4.0, "last": None, "median7": None, "list": [], "as_of": NOW.isoformat()}
+        r = self.build(live=live, session_share={UUID_A: ss})
+        self.assertEqual(r["live"][UUID_A]["meters"], [])
+        self.assertEqual(r["session_share"], {UUID_A: ss})
+
+    def test_no_home_paths_leave_this_mac(self):
+        """Review-security 2 (J approved): what this Mac writes to the shared folder names accounts by
+        uuid only. Each live block's key becomes acct:<uuid>, its folders [], and no path or path
+        hash is left anywhere in the report."""
+        home = str(Path(self.folder_a).parent)
+        live = {UUID_A: acct_block(meters=[])}
+        live[UUID_A]["key"], live[UUID_A]["folders"] = self.folder_a, [self.folder_a, self.folder_b]
+        r = self.build(live=live)
+        self.assertEqual(r["live"][UUID_A]["key"], "acct:" + UUID_A)
+        self.assertEqual(r["live"][UUID_A]["folders"], [])
+        self.assertEqual(live[UUID_A]["key"], self.folder_a)       # the caller's feed block is untouched
+        text = json.dumps(r)
+        self.assertNotIn(home, text)
+        for f in (self.folder_a, self.folder_b):
+            self.assertNotIn(f, text)
+            self.assertNotIn(hashlib.sha256(f.encode()).hexdigest()[:8], text)
+        self.put("Sam@mac-a1b2.json", r)
+        reports, notes = share.load_reports(self.dir, "zzzz")
+        self.assertEqual((len(reports), notes), (1, []))
+        self.assertEqual(share.people(reports, NOW)[0].accounts[0]["key"], "acct:" + UUID_A)
 
     def test_live_must_be_object_of_objects(self):
         with self.assertRaises(ValueError):
@@ -261,6 +295,30 @@ class RewriteTests(unittest.TestCase):
 class LoadTests(FolderCase):
     def load(self, own="zzzz"):
         return share.load_reports(self.dir, own)
+
+    def test_one_hostile_file_skips_only_itself(self):
+        """Review-security 3: a symlink (Syncthing syncs them as links), an oversized file, or JSON
+        nested deep enough to raise RecursionError is skipped and named; the good report loads."""
+        from unittest import mock
+        self.put("Lee@lee-mac-c3d4.json", peer())
+        big = self.dir.parent / (self.dir.name + "-big.bin")
+        big.write_bytes(b"x" * 10)
+        self.addCleanup(big.unlink)
+        (self.dir / "link.json").symlink_to(big)
+        (self.dir / "huge.json").write_bytes(b" " * (share.REPORT_MAX_BYTES + 1))
+        self.put("deep.json", "[[[]]]")
+        real = json.loads
+
+        def loads(text, *a, **k):
+            if text == "[[[]]]":
+                raise RecursionError("maximum recursion depth exceeded")
+            return real(text, *a, **k)
+        with mock.patch("ju.share.json.loads", loads):
+            reports, notes = self.load()
+        self.assertEqual([r.user for r in reports], ["Lee"])
+        self.assertIn("skipped link.json: not a regular file", notes)
+        self.assertIn(f"skipped huge.json: larger than {share.REPORT_MAX_BYTES} bytes", notes)
+        self.assertIn("skipped deep.json: unreadable (RecursionError)", notes)
 
     def test_load_reports_skips_tmp_conflict_and_bad_shape(self):
         self.put("Lee@lee-mac-c3d4.json", peer())
@@ -428,23 +486,72 @@ class PeopleTests(FolderCase):
         fresh = share.people(self.load(**{"Lee@m-c3d4.json": peer(generated=NOW - timedelta(minutes=14))}), NOW)[0]
         self.assertFalse(fresh.is_stale(NOW))
 
+    def test_hostile_or_broken_live_blocks_are_skipped(self):
+        """Review-security 1b: a report's live blocks are checked field by field; one that would
+        inject into the page or crash the builder is skipped and named, never rendered."""
+        from tests.engine.test_dash_fixtures import account, meter
+        good = account(uuid=UUID_A)
+        bad = {
+            "state": account(uuid=UUID_A, meters=[meter(state='x" onmouseover="y')]),
+            "pct_text": account(uuid=UUID_A, meters=[dict(meter(), pct="40")]),
+            "pct_high": account(uuid=UUID_A, meters=[dict(meter(), pct=500.0)]),
+            "no_pace": account(uuid=UUID_A, meters=[{k: v for k, v in meter().items() if k != "pace"}]),
+            "words_obj": account(uuid=UUID_A, meters=[meter(words={"a": 1})]),
+            "read_at": account(uuid=UUID_A, meters=[dict(meter(), read_at="yesterday")]),
+            "email_obj": dict(good, email={"x": 1}),
+            "uuid_other": account(uuid=UUID_B),
+            "error_kind": dict(good, error={"kind": "boom", "text": "t", "until": None}),
+            "share_text": dict(good, session_share={"current": "4", "last": None, "median7": None,
+                                                   "list": [], "as_of": NOW.isoformat()}),
+        }
+        for why, blk in bad.items():
+            with self.subTest(why):
+                self.put("Lee@m-c3d4.json", peer(live={UUID_A: blk}))
+                reports, notes = share.load_reports(self.dir, "zzzz")
+                self.assertEqual(reports, [])
+                self.assertEqual(len(notes), 1)
+                self.assertTrue(notes[0].startswith("skipped Lee@m-c3d4.json: live"), notes[0])
+        self.put("Lee@m-c3d4.json", peer(live={UUID_A: good}))
+        self.assertEqual(len(share.load_reports(self.dir, "zzzz")[0]), 1)
+
+    def test_bad_day_parts_are_skipped(self):
+        for why, d in {"model_text": dict(day_entry(), models={"m": "x"}),
+                       "acct_tokens": dict(day_entry(), accounts={UUID_A: {"tokens": "9", "usd": 1.0}}),
+                       "proj_list": dict(day_entry(), projects={"p": []}),
+                       "not_a_date": None}.items():
+            with self.subTest(why):
+                days = {"2026-99-99": day_entry()} if d is None else {"2026-11-26": d}
+                self.put("Lee@m-c3d4.json", peer(days=days))
+                reports, notes = share.load_reports(self.dir, "zzzz")
+                self.assertEqual(reports, [], notes)
+
     def test_peer_accounts_have_no_runs_out(self):
-        live = {UUID_A: {"number": 1, "uuid": UUID_A, "meters": [
-            {"id": "weekly", "pct": 40.0, "pace": {"state": "green", "runs_out": "2026-11-27T10:00:00+00:00", "e": 0.4}}]}}
+        live = {UUID_A: acct_block(meters=[meter_block("weekly", pct=40.0, state="green",
+                                                       runs_out="2026-11-27T10:00:00+00:00", e=0.4)])}
         p = share.people(self.load(**{"Lee@m-c3d4.json": peer(live=live)}), NOW)[0]
         meter = p.accounts[0]["meters"][0]
         self.assertNotIn("runs_out", meter["pace"])
         self.assertEqual(meter["pace"]["state"], "green")
+
+    def test_peer_words_lose_the_runs_out_placeholder(self):
+        """Review-engine 9: with runs_out removed, no `{runs_out}` may be left for the app to show."""
+        live = {UUID_A: acct_block(meters=[meter_block(
+            "weekly", pct=80.0, state="amber", runs_out="2026-11-27T10:00:00+00:00", e=0.4,
+            words="At this pace you hit the limit {runs_out}, 2h 05m before the reset.")])}
+        p = share.people(self.load(**{"Lee@m-c3d4.json": peer(live=live)}), NOW)[0]
+        words = p.accounts[0]["meters"][0]["pace"]["words"]
+        self.assertNotIn("{runs_out}", words)
+        self.assertEqual(words, "At this pace you hit the limit before the reset.")
         self.assertEqual(live[UUID_A]["meters"][0]["pace"]["runs_out"], "2026-11-27T10:00:00+00:00")  # input untouched
 
     def test_newest_report_speaks_for_an_account(self):
-        old = {UUID_A: {"marker": "old"}}
-        new = {UUID_A: {"marker": "new"}}
+        old = {UUID_A: acct_block(warning="old")}
+        new = {UUID_A: acct_block(warning="new")}
         reports = self.load(**{
             "Lee@m1-c3d4.json": peer(install="c3d4", generated=NOW - timedelta(minutes=1), live=old),
             "Lee@m2-e5f6.json": peer(install="e5f6", generated=NOW, live=new)})
         p = share.people(reports, NOW)[0]
-        self.assertEqual([a["marker"] for a in p.accounts], ["new"])
+        self.assertEqual([a["warning"] for a in p.accounts], ["new"])
 
     def test_legacy_person_is_flagged_and_alone(self):
         reports = self.load(**{"Old@old-mac.json": legacy(), "Lee@m-c3d4.json": peer()})

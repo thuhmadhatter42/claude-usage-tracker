@@ -16,7 +16,7 @@ from pathlib import Path
 
 from tests.engine import support
 from tests.engine.test_live_store import FakeIO, METER_LOG_DDL
-from ju import gate, timeutil
+from ju import gate, identity, timeutil
 from ju.contracts import (HttpError, IdentityRejected, Login, LoginError, Meter, NetworkError, RateLimited,
                           ReplyChanged)
 from ju.live_store import AccountLive, ErrorInfo, LiveStore
@@ -81,19 +81,19 @@ class TestDue(unittest.TestCase):
         self.assertFalse(gate.due(fresh(), 600, T0 + timedelta(seconds=59), False, per_model, service_at=None).due)
 
     def test_reset_passed_never_beats_block(self):
-        acc = gate.on_429(fresh(), 120, T0, lambda: 0.0)
+        acc = gate.on_429(fresh(), 120, T0, lambda: 0.0, 60)
         meters = [Meter("session", "Session", 50.0, T0 + timedelta(seconds=5), 18000)]
         d = gate.due(acc, 60, T0 + timedelta(seconds=60), False, meters)
         self.assertFalse(d.due)
-        self.assertEqual(d.next_at, T0 + timedelta(seconds=120))
+        self.assertEqual(d.next_at, T0 + timedelta(seconds=300))     # the ladder outlasts a short Retry-After
 
 
 class TestBackoff(unittest.TestCase):
     def test_429_retry_after_120_0_absent_7200_capped(self):
-        cases = {120: (120, True), 0: (300, False), None: (300, False), 7200: (3600, True)}
+        cases = {900: (900, True), 120: (300, True), 0: (300, False), None: (300, False), 7200: (3600, True)}
         for ra, (wait, explicit) in cases.items():
             with self.subTest(retry_after=ra):
-                acc = gate.on_429(fresh(), ra, T0, lambda: 0.0)
+                acc = gate.on_429(fresh(), ra, T0, lambda: 0.0, 60)
                 self.assertEqual(acc.blocked_until, T0 + timedelta(seconds=wait))
                 self.assertEqual(acc.retry_after_explicit, explicit)
                 self.assertEqual(acc.error.kind, "rate_limited")
@@ -107,7 +107,7 @@ class TestBackoff(unittest.TestCase):
             acc = fresh()
             waits = []
             for _ in range(6):
-                acc = gate.on_429(acc, None, T0, lambda: r)
+                acc = gate.on_429(acc, None, T0, lambda: r, 60)
                 waits.append((acc.blocked_until - T0).total_seconds())
             expect = [s * factor for s in (300, 600, 1200, 1800, 1800, 1800)]
             for w, e in zip(waits, expect):
@@ -116,13 +116,13 @@ class TestBackoff(unittest.TestCase):
         rng = random.Random(7)
         acc = fresh()
         for base in (300, 600, 1200, 1800, 1800):
-            acc = gate.on_429(acc, None, T0, rng.random)
+            acc = gate.on_429(acc, None, T0, rng.random, 60)
             w = (acc.blocked_until - T0).total_seconds()
             self.assertGreaterEqual(w, base)
             self.assertLessEqual(w, base * 1.2)
 
     def test_success_clears_backoff(self):
-        acc = gate.on_429(gate.on_429(fresh(), None, T0, lambda: 0.0), None, T0, lambda: 0.0)
+        acc = gate.on_429(gate.on_429(fresh(), None, T0, lambda: 0.0, 60), None, T0, lambda: 0.0, 60)
         self.assertEqual(acc.backoff_step, 2)
         ok = gate.on_success(acc, data={"n": 2}, uuid="u", warning=None, anchor=acc.reset_anchor,
                              now=T0 + timedelta(hours=1))
@@ -132,11 +132,27 @@ class TestBackoff(unittest.TestCase):
         self.assertFalse(ok.retry_after_explicit)
         self.assertEqual(ok.source, "service")
         self.assertEqual(ok.fetched, T0 + timedelta(hours=1))
-        self.assertEqual(gate.on_429(ok, None, T0, lambda: 0.0).blocked_until, T0 + timedelta(seconds=300))
+        self.assertEqual(gate.on_429(ok, None, T0, lambda: 0.0, 60).blocked_until, T0 + timedelta(seconds=300))
 
     def test_explicit_retry_after_is_exact_no_jitter(self):
-        acc = gate.on_429(fresh(), 120, T0, lambda: 0.99)
-        self.assertEqual(acc.blocked_until, T0 + timedelta(seconds=120))
+        acc = gate.on_429(fresh(), 900, T0, lambda: 0.99, 60)
+        self.assertEqual(acc.blocked_until, T0 + timedelta(seconds=900))
+
+    def test_short_retry_after_never_shortens_the_cadence(self):
+        """Review-engine 2: Retry-After only ever lengthens a wait. The block is the longest of the
+        Retry-After, the ladder step and read_every_s, and every 429 climbs the ladder."""
+        acc = fresh(at=T0 - timedelta(hours=1))
+        waits = []
+        now = T0
+        for _ in range(5):
+            acc = gate.on_429(acc, 5, now, lambda: 0.0, 600)
+            waits.append((acc.blocked_until - now).total_seconds())
+            self.assertTrue(acc.retry_after_explicit)
+            now = acc.blocked_until
+        self.assertEqual(waits, [600, 600, 1200, 1800, 1800])
+        self.assertEqual(acc.backoff_step, 5)
+        # the 60 s default: still never sooner than the ladder
+        self.assertEqual(gate.on_429(fresh(), 5, T0, lambda: 0.0, 60).blocked_until, T0 + timedelta(seconds=300))
 
     def test_failure_never_sooner(self):
         for kind in ("no_network", "http", "reply_changed", "login_expired", "identity_changed"):
@@ -154,13 +170,13 @@ class TestBackoff(unittest.TestCase):
             gate.on_failure(fresh(), "rate_limited", "t", T0, lambda: 0.0)   # 429s go through on_429
 
     def test_explicit_block_never_shortened(self):
-        acc = gate.on_429(fresh(), 3600, T0, lambda: 0.0)
+        acc = gate.on_429(fresh(), 3600, T0, lambda: 0.0, 60)
         after = gate.on_failure(acc, "no_network", "No network", T0 + timedelta(seconds=10), lambda: 0.0)
         self.assertEqual(after.blocked_until, T0 + timedelta(seconds=3600))
         self.assertTrue(after.retry_after_explicit)
 
     def test_cadence_never_beats_backoff(self):
-        acc = gate.on_429(fresh(), None, T0, lambda: 0.0)
+        acc = gate.on_429(fresh(), None, T0, lambda: 0.0, 60)
         for s in (15, 16, 60, 299):
             self.assertFalse(gate.due(acc, 15, T0 + timedelta(seconds=s), False, []).due, s)
         self.assertTrue(gate.due(acc, 15, T0 + timedelta(seconds=300), False, []).due)
@@ -168,8 +184,8 @@ class TestBackoff(unittest.TestCase):
 
 class TestManual(unittest.TestCase):
     def test_manual_vs_explicit_retry_after(self):
-        guessed = gate.on_429(fresh(at=T0 - timedelta(minutes=5)), None, T0, lambda: 0.0)
-        explicit = gate.on_429(fresh(at=T0 - timedelta(minutes=5)), 900, T0, lambda: 0.0)
+        guessed = gate.on_429(fresh(at=T0 - timedelta(minutes=5)), None, T0, lambda: 0.0, 60)
+        explicit = gate.on_429(fresh(at=T0 - timedelta(minutes=5)), 900, T0, lambda: 0.0, 60)
         later = T0 + timedelta(seconds=20)
         self.assertTrue(gate.due(guessed, 60, later, True, []).due)
         d = gate.due(explicit, 60, later, True, [])
@@ -316,6 +332,28 @@ class TestRefresh(RefreshCase):
                 self.assertIsNone(res.live.account(self.b).error)
                 self.assertIsNotNone(res.live.account(self.a).blocked_until)
 
+    def test_a_crash_after_a_fetch_still_saves_every_account(self):
+        """Review-engine 1: #1 is told to wait an hour, then logging #2's reading fails (a locked
+        database). The error is loud, but #1's block and #2's reading are on disk, so the next run
+        does not call the service 30 s after it was asked to wait an hour."""
+        s = Script(self.io, self.state, logins={self.a: "ta", self.b: "tb"},
+                   uuids={self.a: ["u1"], self.b: ["u2"]},
+                   replies={"ta": [RateLimited(3600)], "tb": [reply(10)]})
+        deps = s.deps()
+
+        def locked(state):
+            raise sqlite3.OperationalError("database is locked")
+        deps = replace(deps, open_db=locked)
+        with self.assertRaises(sqlite3.OperationalError):
+            gate.refresh(self.state, [self.a, self.b], manual=False, deps=deps)
+        on_disk = LiveStore(self.io.store_io()).load(self.state, [self.a, self.b])
+        self.assertEqual(on_disk.account(self.a).blocked_until, T0 + timedelta(seconds=3600))
+        self.assertTrue(on_disk.account(self.a).retry_after_explicit)
+        self.assertEqual(on_disk.account(self.b).data, reply(10))
+        s.clock[0] = T0 + timedelta(seconds=30)
+        gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
+        self.assertEqual(s.fetched_tokens, ["ta", "tb"])     # nothing read again
+
     def test_identity_changed_discarded_last_good_kept(self):
         s = Script(self.io, self.state, logins={self.a: "ta"}, uuids={self.a: ["u1"]}, replies={"ta": [reply(40)]})
         gate.refresh(self.state, [self.a], manual=False, deps=s.deps())
@@ -328,27 +366,105 @@ class TestRefresh(RefreshCase):
         self.assertEqual(acc.fetched, T0)
         self.assertEqual(s2.rows("SELECT COUNT(*) FROM meter_log")[0][0], 2)   # only the first reading
 
-    def test_foreign_reset_rejected(self):
+    def test_foreign_reset_rejected_for_the_legacy_item(self):
+        """R-14 on a reading from the unsuffixed item (it names no account): a weekly reset that is
+        another account's learned minute is that account's reading."""
+        leg = str(self.home.home / ".claude-legacy")
         seen = {}
 
         def observe(anchor, weekly_reset, others):
             seen["others"], seen["weekly_reset"] = others, weekly_reset
-            if weekly_reset == timeutil.parse_iso("2026-11-27T09:00:00+00:00"):
-                return dict(anchor, candidate=1), "reject_foreign"
-            return anchor, "accept"
+            return identity.observe(anchor, weekly_reset, others)
 
         anchor_b = {"minute_of_week": 6300, "confirmations": 2, "candidate": None, "candidate_count": 0}  # 09:00 Fri
         LiveStore(self.io.store_io()).save(self.state, gate_live({self.b: fresh(at=T0, reset_anchor=anchor_b)}))
-        s = Script(self.io, self.state, logins={self.a: "ta", self.b: "tb"}, uuids={self.a: ["u1"], self.b: ["u2"]},
+        s = Script(self.io, self.state, logins={leg: "ta", self.b: "tb"}, uuids={leg: ["u1"], self.b: ["u2"]},
                    replies={"ta": [reply(40, weekly_reset="2026-11-27T09:00:00+00:00")]}, observe=observe)
-        res = gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
-        acc = res.live.account(self.a)
+        res = gate.refresh(self.state, [leg, self.b], manual=False, deps=s.deps())
+        acc = res.live.account(leg)
         self.assertEqual(acc.error.kind, "identity_foreign_reset")
         self.assertIsNone(acc.data)
-        self.assertEqual(acc.reset_anchor["candidate"], 1)    # E12's anchor update is kept
-        self.assertEqual(seen["others"], {self.b: 6300})
+        self.assertEqual(acc.reset_anchor, identity.new_anchor())   # a rejected legacy reading teaches nothing
         self.assertEqual(acc.error.other, self.b)             # RULING 31: the matched account is named
         self.assertEqual(s.fetched_tokens, ["ta"])            # b was fresh: not fetched
+
+    def _legacy_run(self, *, own_anchor=None, other_anchor=None, weekly="2026-11-28T18:00:00+00:00"):
+        leg = str(self.home.home / ".claude-legacy")
+        stored = {}
+        if own_anchor is not None:
+            stored[leg] = fresh(at=T0 - timedelta(hours=1), reset_anchor=own_anchor)
+        stored[self.b] = fresh(at=T0, reset_anchor=other_anchor or identity.new_anchor())
+        LiveStore(self.io.store_io()).save(self.state, gate_live(stored))
+        s = Script(self.io, self.state, logins={leg: "ta", self.b: "tb"}, uuids={leg: ["u1"], self.b: ["u2"]},
+                   replies={"ta": [reply(40, weekly_reset=weekly)]}, observe=identity.observe)
+        return leg, gate.refresh(self.state, [leg, self.b], manual=False, deps=s.deps()).live.account(leg)
+
+    def test_legacy_reading_never_teaches_a_new_minute(self):
+        """Review-engine 4 (R-10): the unsuffixed item names no account. With a learned minute, its
+        reading must match it; a different minute is discarded and counts toward nothing."""
+        sat = timeutil.minute_of_week(timeutil.parse_iso("2026-11-28T18:00:00+00:00"))
+        own = {"minute_of_week": sat, "confirmations": 3, "candidate": None, "candidate_count": 0}
+        leg, acc = self._legacy_run(own_anchor=own, weekly="2026-11-29T03:00:00+00:00")
+        self.assertEqual(acc.error.kind, "identity_foreign_reset")
+        self.assertIsNone(acc.error.other)
+        self.assertEqual(acc.reset_anchor, own)                    # no candidate counted
+        self.assertEqual(acc.data, {"meters": []})                 # last good kept
+        self.assertIsNotNone(acc.blocked_until)
+
+    def test_legacy_reading_matching_its_own_minute_is_accepted(self):
+        sat = timeutil.minute_of_week(timeutil.parse_iso("2026-11-28T18:00:00+00:00"))
+        own = {"minute_of_week": sat, "confirmations": 3, "candidate": None, "candidate_count": 0}
+        leg, acc = self._legacy_run(own_anchor=own)
+        self.assertIsNone(acc.error)
+        self.assertEqual(acc.data, reply(40))
+        self.assertEqual(acc.reset_anchor["confirmations"], 4)
+
+    def test_legacy_reading_unchecked_while_another_account_is_unlearned(self):
+        """Nothing learned for this account and another account's minute unknown: the reading could
+        be that account's, so it is discarded and teaches nothing."""
+        leg, acc = self._legacy_run()
+        self.assertEqual(acc.error.kind, "identity_foreign_reset")
+        self.assertIsNone(acc.data)
+        self.assertEqual(acc.reset_anchor, identity.new_anchor())
+
+    def test_legacy_reading_learns_when_every_other_account_is_known(self):
+        """Every other account's minute is learned and this reading matches none: it cannot be
+        theirs, so it is accepted and starts learning (a Mac whose only login is the old item)."""
+        other = {"minute_of_week": 6300, "confirmations": 2, "candidate": None, "candidate_count": 0}
+        leg, acc = self._legacy_run(other_anchor=other)
+        self.assertIsNone(acc.error)
+        self.assertEqual(acc.data, reply(40))
+        self.assertEqual(acc.reset_anchor["candidate_count"], 1)
+
+    def test_legacy_only_account_on_its_own_learns(self):
+        leg = str(self.home.home / ".claude-legacy")
+        s = Script(self.io, self.state, logins={leg: "ta"}, uuids={leg: ["u1"]},
+                   replies={"ta": [reply(40)]}, observe=identity.observe)
+        acc = gate.refresh(self.state, [leg], manual=False, deps=s.deps()).live.account(leg)
+        self.assertIsNone(acc.error)
+        self.assertEqual(acc.reset_anchor["candidate_count"], 1)
+
+    def test_same_reset_as_another_account_never_locks_a_hashed_item_out(self):
+        """Review-engine 3: two accounts whose weekly resets coincide (a global reset moves both).
+        A hashed item's reading passed the uuid check, so it is accepted and relearns the minute."""
+        anchor_a = {"minute_of_week": identity.timeutil.minute_of_week(timeutil.parse_iso("2026-11-28T18:00:00+00:00")),
+                    "confirmations": 5, "candidate": None, "candidate_count": 0}
+        anchor_b = {"minute_of_week": 6300, "confirmations": 2, "candidate": None, "candidate_count": 0}
+        LiveStore(self.io.store_io()).save(self.state, gate_live({
+            self.a: fresh(at=T0 - timedelta(hours=1), reset_anchor=anchor_a),
+            self.b: fresh(at=T0, reset_anchor=anchor_b)}))
+        same = "2026-11-27T09:00:00+00:00"
+        s = Script(self.io, self.state, logins={self.a: "ta", self.b: "tb"}, uuids={self.a: ["u1"], self.b: ["u2"]},
+                   replies={"ta": [reply(40, weekly_reset=same), reply(41, weekly_reset=same)],
+                            "tb": [reply(10, weekly_reset=same)]},
+                   observe=identity.observe)
+        res = gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
+        self.assertIsNone(res.live.account(self.a).error)
+        self.assertEqual(res.live.account(self.a).data, reply(40, weekly_reset=same))
+        s.clock[0] = T0 + timedelta(seconds=60)
+        res = gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
+        self.assertIsNone(res.live.account(self.a).error)
+        self.assertEqual(res.live.account(self.a).reset_anchor["minute_of_week"], 6300)   # relearned
 
     def test_two_folders_one_uuid_single_block(self):
         old = fresh(at=T0 - timedelta(minutes=30))
@@ -391,6 +507,25 @@ class TestRefresh(RefreshCase):
         self.assertEqual(blk.state.error, ErrorInfo("login_missing", "No login", T0))
         self.assertIsNotNone(blk.state.blocked_until)
 
+    def test_login_failure_is_saved_so_its_backoff_grows(self):
+        """Review-engine 7: a run that reads nothing (no login anywhere) still saves the account's
+        block, so the next run waits it out and a repeat climbs the ladder (5, then 10 min)."""
+        missing = LoginError("login_expired", "Open Claude Code on this account, then refresh")
+        s = Script(self.io, self.state, logins={self.a: missing}, uuids={self.a: ["u1"]}, replies={})
+        gate.refresh(self.state, [self.a], manual=False, deps=s.deps())
+        on_disk = LiveStore(self.io.store_io()).load(self.state, [self.a]).account(self.a)
+        self.assertEqual(on_disk.error.kind, "login_expired")
+        self.assertEqual(on_disk.blocked_until, T0 + timedelta(seconds=300))
+        self.assertEqual(on_disk.backoff_step, 1)
+        s.clock[0] = T0 + timedelta(seconds=60)               # blocked: nothing tried, nothing changes
+        res = gate.refresh(self.state, [self.a], manual=False, deps=s.deps())
+        self.assertEqual(res.live.account(self.a).backoff_step, 1)
+        s.clock[0] = T0 + timedelta(seconds=300)
+        gate.refresh(self.state, [self.a], manual=False, deps=s.deps())
+        on_disk = LiveStore(self.io.store_io()).load(self.state, [self.a]).account(self.a)
+        self.assertEqual(on_disk.backoff_step, 2)
+        self.assertEqual(on_disk.blocked_until, T0 + timedelta(seconds=900))
+
     def test_merge_freshest_wins_when_lead_older(self):
         LiveStore(self.io.store_io()).save(self.state, gate_live({
             self.a: fresh(at=T0 - timedelta(seconds=10)),
@@ -403,11 +538,11 @@ class TestRefresh(RefreshCase):
     def test_next_due_is_earliest(self):
         LiveStore(self.io.store_io()).save(self.state, gate_live({
             self.a: fresh(at=T0 - timedelta(seconds=20)),
-            self.b: gate.on_429(fresh(at=T0 - timedelta(seconds=50)), 25, T0 - timedelta(seconds=10), lambda: 0)}))
+            self.b: gate.on_429(fresh(at=T0 - timedelta(seconds=50)), 25, T0 - timedelta(seconds=295), lambda: 0, 60)}))
         s = Script(self.io, self.state, logins={}, uuids={self.a: ["u1"], self.b: ["u2"]}, replies={})
         res = gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
         self.assertEqual(s.fetched_tokens, [])
-        self.assertEqual(res.next_due, T0 + timedelta(seconds=15))   # b's Retry-After ends before a's cadence
+        self.assertEqual(res.next_due, T0 + timedelta(seconds=5))    # b's block ends before a's cadence
 
     def test_manual_records_last_manual(self):
         s = Script(self.io, self.state, logins={self.a: "ta"}, uuids={self.a: ["u"]},

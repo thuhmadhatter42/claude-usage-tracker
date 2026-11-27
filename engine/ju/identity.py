@@ -49,6 +49,12 @@ def foreign_match(weekly_reset: Optional[datetime], others: Mapping[str, int]) -
     return next((k for k in sorted(others) if _near(w, others[k])), None)
 
 
+def matches_own(anchor: Mapping, weekly_reset: Optional[datetime]) -> bool:
+    """True when this weekly reset falls on the account's learned minute (none learned -> False)."""
+    own = anchor.get("minute_of_week")
+    return weekly_reset is not None and own is not None and _near(timeutil.minute_of_week(weekly_reset), own)
+
+
 def observe(anchor: Mapping, weekly_reset: Optional[datetime], others: Mapping[str, int]) -> Tuple[dict, str]:
     """Judge one reading's weekly reset against this account's learned minute and the other
     accounts' (`others`: folder key -> learned minute). Returns (new anchor, verdict); the input

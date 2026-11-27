@@ -14,13 +14,13 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from dataclasses import asdict, dataclass, field, fields
-from datetime import datetime, timedelta
+from dataclasses import asdict, dataclass, field, fields, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence, Union
 
 from .constants import LIVE_SCHEMA, STALE_AFTER_S
-from .contracts import ERROR_KINDS, BringUpRefused, Reading
+from .contracts import ERROR_KINDS, BringUpRefused, Reading, ReplyChanged
 from .timeutil import iso, parse_iso
 
 FILE_NAME = "live.json"
@@ -93,6 +93,7 @@ class StoreIO:
     read_json: Callable[[Path], dict]                 # E3: raises corrupt_error on bad JSON / non-object
     corrupt_error: type                               # E3: CorruptFile
     log: Callable[..., None]                          # E2: log(level, msg, **kv), never raises
+    check_reply: Callable[[dict], object]             # E11 parse: raises ReplyChanged on a reply it refuses
 
 
 class _BadShape(ValueError):
@@ -170,15 +171,35 @@ class LiveStore:
                 self.io.log("warn", "live.json migration: unreadable legacy entry; dropped", entry=name,
                             reason=str(e))
                 continue
+            if acc.data is not None:
+                try:
+                    self.io.check_reply(acc.data)
+                except ReplyChanged:
+                    # 0.1.x stored any reply it got; one 0.2.0 refuses would crash every later parse
+                    self.io.log("warn", "live.json migration: stored reply no longer parses; kept without data",
+                                entry=name)
+                    acc = replace(acc, data=None)
             live.put(key, acc)
         return live
+
+
+METER_LOG_KEEP_DAYS = 35      # read back: the weekly period (session share) and the newest service row
+
+
+def ts_floor(at: datetime) -> str:
+    """A text lower bound for meter_log `ts`, safe to compare in SQL. `ts` keeps the offset it was
+    written with, so text order is local wall-clock order; a bound one day earlier than `at` (in
+    UTC, no offset) is below every row at or after `at`, whatever its offset. Callers filter the
+    exact instant in Python; this only keeps SQL from handing back the whole history."""
+    return (at.astimezone(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def log_meters(conn: sqlite3.Connection, key: str, reading: Reading) -> None:
     """One meter_log row per meter of a successful reading (R-35). resets_at is rounded to the
     minute: the service's reset time drifts sub-second, and readings of one period must match.
     `ts` is whole seconds, so a status-line capture and a service read can share one: the service
-    row is kept either way (the per-model age, RULING 29, is measured from it)."""
+    row is kept either way (the per-model age, RULING 29, is measured from it). Rows older than
+    METER_LOG_KEEP_DAYS are pruned here, so the table never grows with history."""
     ts = iso(reading.fetched)
     conn.executemany(
         "INSERT INTO meter_log (ts, account, meter, pct, resets_at, source) VALUES (?, ?, ?, ?, ?, ?) "
@@ -186,6 +207,8 @@ def log_meters(conn: sqlite3.Connection, key: str, reading: Reading) -> None:
         "source = excluded.source WHERE excluded.source = 'service'",
         [(ts, key, m.id, float(m.pct), iso(_round_minute(m.resets_at)) if m.resets_at else None, reading.source)
          for m in reading.meters])
+    conn.execute("DELETE FROM meter_log WHERE ts < ?",
+                 (ts_floor(reading.fetched - timedelta(days=METER_LOG_KEEP_DAYS)),))
     conn.commit()
 
 

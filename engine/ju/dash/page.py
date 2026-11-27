@@ -4,6 +4,8 @@ the sections, the data block, the house web modules and the page script. The tem
 by named placeholders from a closed set; nothing is %-formatted (R-128). Never touches the DB."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
 from datetime import datetime
@@ -17,7 +19,7 @@ from ju.themes import load_themes
 
 STATIC = Path(__file__).resolve().parent / "static"
 THEMES_PATH = HERE.parent / "themes.json"
-PLACEHOLDERS = ("head_theme", "house_css", "theme_css", "dash_css", "title", "body", "drawer", "data",
+PLACEHOLDERS = ("csp", "head_theme", "house_css", "theme_css", "dash_css", "title", "body", "drawer", "data",
                 "house_js", "dash_js")
 HOUSE_CSS = ("glow.css", "accent.css", "quickkeys.css", "report.css")
 HOUSE_JS = ("house-config.js", "errlog.js", "accent.js", "quickkeys.js", "report.js", "tips.js", "version.js")
@@ -61,6 +63,19 @@ def _theme_list(themes: dict) -> list:
     return out
 
 
+SCRIPT_SLOTS = ("head_theme", "house_js", "dash_js")      # the page's only executable scripts
+
+
+def csp(values: dict) -> str:
+    """The page's Content-Security-Policy. It needs no network (a file:// page, errUrl empty), so
+    nothing loads or leaves; scripts run only when their exact text hashes to one of the page's own
+    three, so a handler or script that report data smuggled in does nothing (review-security 1)."""
+    hashes = " ".join("'sha256-%s'" % base64.b64encode(hashlib.sha256(values[k].encode("utf-8")).digest()).decode()
+                      for k in SCRIPT_SLOTS)
+    return (f"default-src 'none'; script-src {hashes}; style-src 'unsafe-inline'; img-src data:; "
+            "base-uri 'none'; form-action 'none'")
+
+
 def _read(names) -> str:
     return "\n".join((STATIC / "house" / n).read_text(encoding="utf-8") for n in names)
 
@@ -80,7 +95,7 @@ def render(reports: List[share.Report], notes: List[str], version: str, now: dat
             "tips": {c["cid"]: {"series": [[k, lab] for k, lab in c["series"]],
                                 "days": {d: {k: int(v) for k, v in vals.items()} for d, vals in c["values"].items()}}
                      for c in model.charts}}
-    return fill(template_text(), {
+    values = {
         "head_theme": _head_theme(themes),
         "house_css": _read(HOUSE_CSS),
         "theme_css": theme_css.css(themes),
@@ -91,7 +106,9 @@ def render(reports: List[share.Report], notes: List[str], version: str, now: dat
         "data": _json_for_script(data),
         "house_js": _read(HOUSE_JS),
         "dash_js": (STATIC / "dash.js").read_text(encoding="utf-8"),
-    })
+    }
+    values["csp"] = csp(values)
+    return fill(template_text(), values)
 
 
 def write(path, html_text: str) -> None:

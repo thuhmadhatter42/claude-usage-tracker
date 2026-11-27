@@ -32,8 +32,8 @@ def meter(mid="session", pct=37.0, *, read_ago_s=60, resets_in_s=9000, period_s=
 
 
 def account(uuid=U1, email="sam@example.com", number=1, meters=None, error=None, session_share=None):
-    return {"key": f"/abs/{number}", "number": number, "email": email, "uuid": uuid,
-            "folders": [f"/abs/{number}"], "weekly_reset": None, "flags": [], "warning": None,
+    return {"key": f"acct:{uuid}", "number": number, "email": email, "uuid": uuid,
+            "folders": [], "weekly_reset": None, "flags": [], "warning": None,
             "error": error, "no_session_meter": False,
             "meters": meters if meters is not None else [meter()],
             "session_share": session_share, "missing_people": []}
@@ -57,7 +57,7 @@ def report_dict(user="Sam", host="mac", install_id="a1b2", gen_ago_s=60, live=No
     """A report v3 file body."""
     live = {U1: account()} if live is None else live
     if accounts is None:
-        accounts = [{"key_hash": "h" + u[:4], "number": b["number"], "email": b["email"], "uuid": u}
+        accounts = [{"number": b["number"], "email": b["email"], "uuid": u}
                     for u, b in live.items()]
     return {"report_version": 3, "user": user, "host": host, "install_id": install_id,
             "tool_version": "0.2.0", "generated": at(seconds=-gen_ago_s), "accounts": accounts,

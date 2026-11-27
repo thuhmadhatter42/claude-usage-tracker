@@ -25,7 +25,7 @@ from ju import accounts, config, formats, fsutil, ledger_query, pace as pace_mod
 from ju.constants import FEED_SCHEMA, RED_AT, SESSION_S, STALE_AFTER_S, WARMUP_E, WEEK_S
 from ju.contracts import Meter, Reading
 from ju.gate import AccountBlock, RefreshResult
-from ju.live_store import AccountLive
+from ju.live_store import AccountLive, ts_floor
 
 STATUSLINE_METERS = ("session", "weekly")      # R-27: the status line has no per-model window
 TOP_PROJECTS = 8
@@ -136,11 +136,14 @@ _KINDS = {"session": "session", "weekly": "weekly_all"}
 def with_capture(acc: AccountLive, reading: Reading) -> AccountLive:
     """RULING 28: an accepted status-line reading as the account's stored reading. `data` keeps
     the usage-service reply shape (so E11 parses it and E14's due() sees it): session and weekly
-    from the capture, the per-model weeklies and the credits flag carried from the last service
+    from the capture (a window it lacks keeps the stored meter), the per-model weeklies and the credits flag carried from the last service
     reply (their age stays in meter_log, which the feed reads)."""
     old = usage_client.parse(acc.data).meters if acc.data is not None else []
-    limits = [{"kind": _KINDS[m.id], "percent": m.pct, "resets_at": _iso(m.resets_at)}
-              for mid in STATUSLINE_METERS for m in reading.meters if m.id == mid]
+    taken = {m.id: m for m in reading.meters if m.id in STATUSLINE_METERS}
+    kept = {m.id: m for m in old}
+    # a capture replaces only the windows it carries; one missing from it keeps the stored meter
+    limits = [{"kind": _KINDS[mid], "percent": m.pct, "resets_at": _iso(m.resets_at)}
+              for mid in STATUSLINE_METERS for m in [taken.get(mid) or kept.get(mid)] if m is not None]
     for m in old:
         if m.id not in STATUSLINE_METERS:
             limits.append({"kind": "weekly_scoped", "percent": m.pct, "resets_at": _iso(m.resets_at),
@@ -157,10 +160,11 @@ def _service_read_at(conn, members: Sequence[str]) -> Callable[[str], Optional[d
     marks = ",".join("?" * len(members))
 
     def read_at(meter_id: str) -> Optional[datetime]:
-        times = [timeutil.parse_iso(r["ts"]) for r in conn.execute(
-            f"SELECT ts FROM meter_log WHERE account IN ({marks}) AND meter = ? AND source = 'service'",
-            [*members, meter_id])]
-        return max(times) if times else None
+        # the newest by insertion, read backward: ts text carries different offsets (gate._service_at)
+        row = conn.execute(
+            f"SELECT ts FROM meter_log WHERE account IN ({marks}) AND meter = ? AND source = 'service' "
+            "ORDER BY rowid DESC LIMIT 1", [*members, meter_id]).fetchone()
+        return timeutil.parse_iso(row["ts"]) if row else None
     return read_at
 
 
@@ -220,8 +224,8 @@ def _session_share(conn, members: Sequence[str], meters: List[dict], no_session:
     period_start = period_end - timedelta(seconds=WEEK_S)
     marks = ",".join("?" * len(members))
     rows = [r for r in conn.execute(
-        f"SELECT ts, meter, pct, resets_at FROM meter_log WHERE account IN ({marks}) "
-        f"AND meter IN ('session', 'weekly')", list(members)).fetchall()
+        f"SELECT ts, meter, pct, resets_at FROM meter_log WHERE ts >= ? AND account IN ({marks}) "
+        f"AND meter IN ('session', 'weekly')", [ts_floor(period_start), *members]).fetchall()
             if period_start <= timeutil.parse_iso(r["ts"]) <= now]
     if no_session:
         since = period_start.astimezone().date().isoformat()

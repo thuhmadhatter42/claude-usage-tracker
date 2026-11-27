@@ -173,6 +173,24 @@ class FetchTests(unittest.TestCase):
             self.assertEqual(cm.exception.kind, "login_expired")
             self.assertEqual(cm.exception.text, "Open Claude Code on this account, then refresh")
 
+    def test_broken_http_reply_is_no_network(self):
+        """Review-engine 1: a connection that breaks mid-reply raises http.client errors, which are
+        not OSError. They are a network failure (stored, laddered), never an escaping crash."""
+        import http.client
+        for exc in (http.client.IncompleteRead(b"{"), http.client.BadStatusLine("x"),
+                    http.client.RemoteDisconnected("gone")):
+            with self.subTest(type(exc).__name__), \
+                    mock.patch("urllib.request.OpenerDirector.open", side_effect=exc):
+                with self.assertRaises(NetworkError):
+                    usage_client.fetch("t", url="https://127.0.0.1:1/x")
+
+    def test_deeply_nested_body_is_reply_changed(self):
+        """Python before 3.15 raises RecursionError (not ValueError) on deeply nested JSON."""
+        with support.FakeUsageServer([(200, {}, b"[[[]]]")]) as srv, \
+                mock.patch("ju.usage_client.json.loads", side_effect=RecursionError("deep")):
+            with self.assertRaises(ReplyChanged):
+                usage_client.fetch("t", url=srv.url)
+
     def test_429_retry_after_seconds_and_date(self):
         future = datetime.now(timezone.utc) + timedelta(seconds=300)
         cases = [({"Retry-After": "120"}, 120), ({}, None), ({"Retry-After": "0"}, None),

@@ -12,10 +12,12 @@ A report that cannot be trusted is skipped and named in `notes`; nothing here de
 belongs to anyone else, and a missing shared folder is an error (R-119)."""
 from __future__ import annotations
 
-import hashlib
+import errno
 import json
 import math
+import os
 import re
+import stat
 import socket
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -26,6 +28,7 @@ from ju import accounts as accounts_mod
 from ju import fsutil, ledger_query, timeutil
 from ju.config import Config, ConfigError, install_id as config_install_id, user_name as config_user_name
 from ju.constants import COLS, REPO_ROOT, REPORT_VERSION, SHARE_MIN_INTERVAL_S, STALE_AFTER_S
+from ju.contracts import ERROR_KINDS
 from ju.timeutil import parse_iso
 
 DAYS_KEPT = 90
@@ -73,10 +76,6 @@ def _tool_version() -> str:
     return text
 
 
-def _hash8(key: str) -> str:
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
-
-
 # ---------------------------------------------------------------- building my report
 
 def _entry(t: ledger_query.Totals) -> dict:
@@ -109,9 +108,8 @@ def build_report(conn, cfg: Config, live: dict, pricing, projects: bool, *,
     idents = {k: v for k, v in cfg.identities.items()
               if isinstance(v, dict) and isinstance(v.get("uuid"), str) and isinstance(v.get("email"), str)}
     uuid_of = {k: v["uuid"] for k, v in idents.items()}
-    accts = sorted(({"key_hash": _hash8(k), "number": accounts_mod.number_for(cfg, k),
-                     "email": v["email"], "uuid": v["uuid"]} for k, v in idents.items()),
-                   key=lambda a: (a["number"], a["key_hash"]))
+    accts = sorted(({"number": accounts_mod.number_for(cfg, k), "email": v["email"], "uuid": v["uuid"]}
+                    for k, v in idents.items()), key=lambda a: (a["number"], a["uuid"]))
 
     since = (now.astimezone().date() - timedelta(days=DAYS_KEPT - 1)).isoformat()
     rows_ = ledger_query.rows(conn, since)
@@ -155,10 +153,18 @@ def build_report(conn, cfg: Config, live: dict, pricing, projects: bool, *,
 
     report = {"report_version": REPORT_VERSION, "user": user, "host": host, "install_id": install,
               "tool_version": _tool_version(), "generated": generated, "accounts": accts,
-              "live": json.loads(json.dumps(live)), "days": days, "blocks": blocks,
+              "live": {u: _shareable(u, b) for u, b in live.items()}, "days": days, "blocks": blocks,
               "session_share": json.loads(json.dumps(shares))}
     _validate_v3(report)                                            # what I write is what I would accept
     return report
+
+
+def _shareable(uuid: str, block: dict) -> dict:
+    """An account block as it may leave this Mac: named by its account id, never by a folder path
+    (a home path names the login; review-security 2, J's call). The feed keeps the real ones."""
+    b = json.loads(json.dumps(block))
+    b["key"], b["folders"] = "acct:" + uuid, []
+    return b
 
 
 def write_report(directory, report: dict, cfg: Config) -> Tuple[Path, List[str]]:
@@ -185,8 +191,8 @@ def write_report(directory, report: dict, cfg: Config) -> Tuple[Path, List[str]]
         if p == out or ".sync-conflict" in p.name:
             continue
         try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            raw = _read_report(p)
+        except _Skip:
             continue
         if not isinstance(raw, dict):
             continue
@@ -259,6 +265,10 @@ def _check_time(label: str, v) -> datetime:
 def _check_day(day: str, d) -> None:
     if not _DAY.match(day) or not isinstance(d, dict):
         raise _Bad(f"days: {day!r} is not a day entry")
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        raise _Bad(f"days: {day!r} is not a date") from None
     for c in COLS + ("calls", "unpriced"):
         if not _is_int(d.get(c)):
             raise _Bad(f"days: {day} {c} must be a whole number")
@@ -267,6 +277,14 @@ def _check_day(day: str, d) -> None:
     for k in ("models", "accounts", "projects"):
         if not isinstance(d.get(k), dict):
             raise _Bad(f"days: {day} {k} must be an object")
+    for mid, x in d["models"].items():
+        if not (isinstance(x, dict) and all(_is_int(x.get(c, 0)) for c in COLS + ("tokens", "calls"))
+                and _is_num(x.get("usd", 0))):
+            raise _Bad(f"days: {day} model {mid!r} is not a model entry")
+    for k in ("accounts", "projects"):
+        for name, x in d[k].items():
+            if not (isinstance(x, dict) and _is_int(x.get("tokens")) and _is_num(x.get("usd"))):
+                raise _Bad(f"days: {day} {k} {name!r} needs whole-number tokens and a usd number")
 
 
 def _check_block(u: str, b) -> None:
@@ -278,6 +296,108 @@ def _check_block(u: str, b) -> None:
         raise _Bad("blocks: a window ends before it starts")
     if not _is_num(b.get("usd")):
         raise _Bad("blocks: usd must be a number")
+
+
+PACE_STATES = frozenset({"green", "amber", "red"})
+PCT_MAX = 101.0
+
+
+def _is_real(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _opt_time(label: str, v) -> None:
+    if v is not None:
+        _check_time(label, v)
+
+
+def _str_list(label: str, v) -> None:
+    if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+        raise _Bad(f"{label} must be a list of text")
+
+
+def _check_share_feed(label: str, ss) -> None:
+    """SessionShare.to_feed(): {current, last, median7: number|null, list [{start, pct}], as_of}."""
+    if not isinstance(ss, dict):
+        raise _Bad(f"{label} must be an object")
+    for k in ("current", "last", "median7"):
+        if ss.get(k) is not None and not _is_real(ss[k]):
+            raise _Bad(f"{label} {k} must be a number")
+    if not isinstance(ss.get("list"), list):
+        raise _Bad(f"{label} list must be a list")
+    for item in ss["list"]:
+        if not isinstance(item, dict) or (item.get("pct") is not None and not _is_real(item["pct"])):
+            raise _Bad(f"{label} list holds something that is not a session")
+        _check_time(f"{label} start", item.get("start"))
+    _check_time(f"{label} as_of", ss.get("as_of"))
+
+
+def _check_meter_block(label: str, m) -> None:
+    """One feed §1.7 meter. Everything the page and the app read from it has its type checked, and
+    pace.state is one of the closed set: a report is someone else's file."""
+    if not isinstance(m, dict):
+        raise _Bad(f"{label} holds something that is not a meter")
+    for k in ("id", "name", "source"):
+        if not isinstance(m.get(k), str):
+            raise _Bad(f"{label} {k} must be text")
+    if not (_is_num(m.get("pct")) and m["pct"] <= PCT_MAX):
+        raise _Bad(f"{label} pct must be a number from 0 to {PCT_MAX:g}")
+    _check_time(f"{label} read_at", m.get("read_at"))
+    _opt_time(f"{label} resets_at", m.get("resets_at"))
+    if not _is_int(m.get("period_s")) or not isinstance(m.get("disagree"), bool):
+        raise _Bad(f"{label} period_s or disagree is the wrong type")
+    p = m.get("pace")
+    if not isinstance(p, dict):
+        raise _Bad(f"{label} pace must be an object")
+    if not _is_real(p.get("e")) or (p.get("landing") is not None and not _is_real(p["landing"])):
+        raise _Bad(f"{label} pace e and landing must be numbers")
+    if p.get("state") is not None and p["state"] not in PACE_STATES:
+        raise _Bad(f"{label} pace state must be green, amber, red or null")
+    if not isinstance(p.get("forecast"), bool) or not isinstance(p.get("reset_due"), bool) \
+            or not isinstance(p.get("words"), str):
+        raise _Bad(f"{label} pace forecast, reset_due or words is the wrong type")
+    _opt_time(f"{label} pace runs_out", p.get("runs_out"))
+    sp = m.get("split")
+    if sp is not None:
+        if not isinstance(sp, dict) or not isinstance(sp.get("parts"), list):
+            raise _Bad(f"{label} split must be an object with parts")
+        _check_time(f"{label} split period_start", sp.get("period_start"))
+        for part in sp["parts"]:
+            if not (isinstance(part, dict) and isinstance(part.get("user"), str)
+                    and isinstance(part.get("install_id"), str) and _is_num(part.get("usd"))
+                    and _is_num(part.get("share"))):
+                raise _Bad(f"{label} split holds something that is not a part")
+
+
+def _check_live_block(u: str, b) -> None:
+    """One account block of `live` (the feed §1.7 account shape), keyed by its own uuid."""
+    label = f"live {u}"
+    if not isinstance(b, dict):
+        raise _Bad(f"{label} must be an object")
+    if b.get("uuid") != u:
+        raise _Bad(f"{label} uuid does not match its key")
+    if not isinstance(b.get("key"), str) or not _is_int(b.get("number")):
+        raise _Bad(f"{label} key or number is the wrong type")
+    for k in ("email", "warning"):
+        if b.get(k) is not None and not isinstance(b[k], str):
+            raise _Bad(f"{label} {k} must be text")
+    _str_list(f"{label} folders", b.get("folders"))
+    _str_list(f"{label} flags", b.get("flags"))
+    _str_list(f"{label} missing_people", b.get("missing_people"))
+    _opt_time(f"{label} weekly_reset", b.get("weekly_reset"))
+    if not isinstance(b.get("no_session_meter"), bool):
+        raise _Bad(f"{label} no_session_meter must be true or false")
+    err = b.get("error")
+    if err is not None:
+        if not (isinstance(err, dict) and err.get("kind") in ERROR_KINDS and isinstance(err.get("text"), str)):
+            raise _Bad(f"{label} error must name a known kind and carry text")
+        _opt_time(f"{label} error until", err.get("until"))
+    if not isinstance(b.get("meters"), list):
+        raise _Bad(f"{label} meters must be a list")
+    for m in b["meters"]:
+        _check_meter_block(f"{label} meter", m)
+    if b.get("session_share") is not None:
+        _check_share_feed(f"{label} session_share", b["session_share"])
 
 
 def _validate_v3(raw) -> None:
@@ -301,11 +421,13 @@ def _validate_v3(raw) -> None:
     if not isinstance(raw["accounts"], list):
         raise _Bad("accounts must be a list")
     for a in raw["accounts"]:
-        if not (isinstance(a, dict) and all(isinstance(a.get(k), str) and a[k] for k in ("key_hash", "email", "uuid"))
+        if not (isinstance(a, dict) and all(isinstance(a.get(k), str) and a[k] for k in ("email", "uuid"))
                 and _is_int(a.get("number"))):
-            raise _Bad("accounts: each needs key_hash, number, email and uuid")
-    if not isinstance(raw["live"], dict) or not all(isinstance(x, dict) for x in raw["live"].values()):
+            raise _Bad("accounts: each needs number, email and uuid")
+    if not isinstance(raw["live"], dict):
         raise _Bad("live must be an object of account blocks")
+    for u, b in raw["live"].items():
+        _check_live_block(u, b)
     if not isinstance(raw["days"], dict):
         raise _Bad("days must be an object keyed by day")
     for day, d in raw["days"].items():
@@ -319,6 +441,8 @@ def _validate_v3(raw) -> None:
             _check_block(u, b)
     if not isinstance(raw["session_share"], dict):
         raise _Bad("session_share must be an object")
+    for u, ss in raw["session_share"].items():
+        _check_share_feed(f"session_share {u}", ss)
 
 
 def _legacy_days(days) -> Dict[str, dict]:
@@ -391,9 +515,44 @@ def _label_accounts(raw: dict) -> Tuple[List[dict], Dict[str, List[dict]]]:
                            "calls": b.get("calls", 0) if _is_int(b.get("calls", 0)) else 0, "usd": b.get("cost", 0)})
         if label in ids:
             blocks.setdefault(ids[label], []).extend(mapped)
-    accounts = [{"key_hash": "", "number": i + 1, "email": label if "@" in label else "", "uuid": u}
+    accounts = [{"number": i + 1, "email": label if "@" in label else "", "uuid": u}
                 for i, (label, u) in enumerate(sorted(ids.items()))]
     return accounts, blocks
+
+
+REPORT_MAX_BYTES = 2_000_000        # a real report is tens of kB; anything this big is not one
+
+
+class _Skip(Exception):
+    """A file in the shared folder that is not read; the text says why."""
+
+
+def _read_report(p: Path):
+    """One shared-folder file's JSON. Never follows a symlink (a synced link can point at any local
+    file), never reads more than REPORT_MAX_BYTES, and treats every parse failure, RecursionError
+    included, as this one file's problem."""
+    try:
+        fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as e:
+        raise _Skip("not a regular file" if e.errno == errno.ELOOP else f"unreadable ({type(e).__name__})") from None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise _Skip("not a regular file")
+        if st.st_size > REPORT_MAX_BYTES:
+            raise _Skip(f"larger than {REPORT_MAX_BYTES} bytes")
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            data = f.read(REPORT_MAX_BYTES + 1)
+    except OSError as e:
+        raise _Skip(f"unreadable ({type(e).__name__})") from None
+    finally:
+        os.close(fd)
+    if len(data) > REPORT_MAX_BYTES:
+        raise _Skip(f"larger than {REPORT_MAX_BYTES} bytes")
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (ValueError, RecursionError) as e:
+        raise _Skip(f"unreadable ({type(e).__name__})") from None
 
 
 def load_reports(directory, own_install: Optional[str]) -> Tuple[List[Report], List[str]]:
@@ -416,12 +575,12 @@ def load_reports(directory, own_install: Optional[str]) -> Tuple[List[Report], L
         if ".sync-conflict" in name:
             notes.append(f"skipped {name}: sync-conflict copy")
             continue
-        if not name.endswith(".json") or not p.is_file():
+        if not name.endswith(".json"):
             continue
         try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            notes.append(f"skipped {name}: unreadable ({type(e).__name__})")
+            raw = _read_report(p)
+        except _Skip as e:
+            notes.append(f"skipped {name}: {e}")
             continue
         try:
             rep = _parse_report(name, raw)
@@ -479,11 +638,18 @@ class Person:
                 "accounts": self.accounts}
 
 
+RUNS_OUT_PEER_TEXT = "At this pace you hit the limit before the reset."
+
+
 def _strip_runs_out(block: dict) -> dict:
+    """A peer's forecast is theirs to time (the runs-out clock is never shown for someone else's
+    meter), so `runs_out` goes, and words that held its `{runs_out}` placeholder say it without one."""
     b = json.loads(json.dumps(block))
     for m in b.get("meters") or []:
         if isinstance(m, dict) and isinstance(m.get("pace"), dict):
             m["pace"].pop("runs_out", None)
+            if "{runs_out}" in str(m["pace"].get("words", "")):
+                m["pace"]["words"] = RUNS_OUT_PEER_TEXT
     return b
 
 
