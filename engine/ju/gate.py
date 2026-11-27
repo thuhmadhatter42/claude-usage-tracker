@@ -38,6 +38,7 @@ LOCK_POLL_S = 0.05
 STUCK = "another jusage refresh is stuck"
 RATE_LIMITED_TEXT = "Anthropic is rate-limiting usage reads"
 IDENTITY_CHANGED_TEXT = "Account changed mid-read; reading discarded"
+LEGACY_UNVERIFIED_TEXT = "Reading from the old shared Keychain login discarded: it can't be matched to this account"
 
 
 @dataclass(frozen=True)
@@ -207,15 +208,17 @@ def _refresh_locked(state: Path, accounts: List[str], manual: bool, deps: GateDe
                 conn = deps.open_db(state)
             if not due(acc, deps.read_every_s, now, manual, _meters(acc, deps), _service_at(conn, members)).due:
                 continue
-            others = {}
+            others, unlearned = {}, False
             for _, other, _ in groups:
                 if other is not members:
                     ok = _current_key(live, other)
                     if live.account(ok).reset_anchor["minute_of_week"] is not None:
                         others[ok] = live.account(ok).reset_anchor["minute_of_week"]
+                    else:
+                        unlearned = True
             if manual:
                 acc = replace(acc, last_manual=now)
-            reader, acc, reading = _read_group(members, acc, others, now, deps)
+            reader, acc, reading = _read_group(members, acc, others, now, deps, unlearned_others=unlearned)
             key = reader if reader is not None else cur
             live.put(key, acc)
             changed = True                      # a failure with no reader is saved too: its ladder grows
@@ -243,11 +246,12 @@ def _refresh_locked(state: Path, accounts: List[str], manual: bool, deps: GateDe
 
 
 def _read_group(members: List[str], acc: AccountLive, others: Dict[str, int], now: datetime,
-                deps: GateDeps) -> Tuple[Optional[str], AccountLive, Optional[Reading]]:
+                deps: GateDeps, *, unlearned_others: bool) -> Tuple[Optional[str], AccountLive, Optional[Reading]]:
     """The group's reader is the first member, in order, whose find_login succeeds; then uuid
     before → fetch → parse → uuid after → fingerprint. Returns (reader or None when no member has
     a login, the updated entry, the accepted reading or None). No login anywhere → the first
-    member's LoginError is the group's error."""
+    member's LoginError is the group's error. `unlearned_others`: some other account on this Mac
+    has no learned weekly minute yet (a legacy-item reading cannot be told apart from it)."""
     first_err: Optional[LoginError] = None
     folder = login = None
     for m in members:
@@ -270,6 +274,12 @@ def _read_group(members: List[str], acc: AccountLive, others: Dict[str, int], no
         deps.check_stable(before, after)
         anchor = acc.reset_anchor
         weekly = next((m.resets_at for m in parsed.meters if m.id == "weekly" and m.resets_at), None)
+        if weekly is not None and login.legacy and not _legacy_checks_out(acc.reset_anchor, weekly, others,
+                                                                         unlearned_others):
+            deps.log("warn", "reading from the legacy Keychain item discarded: weekly reset unverified",
+                     folder=folder, minute_of_week=minute_of_week(weekly))
+            return reader, on_failure(acc, "identity_foreign_reset", LEGACY_UNVERIFIED_TEXT, now, deps.rand,
+                                      other=identity.foreign_match(weekly, others)), None
         if weekly is not None:
             # A hashed item is bound to its folder and the uuid check passed, so another account's
             # minute proves nothing: the reading counts toward relearning (two accounts may share a
@@ -293,6 +303,16 @@ def _read_group(members: List[str], acc: AccountLive, others: Dict[str, int], no
     new = on_success(acc, data=reply, uuid=after, warning=deps.login_warning(login), anchor=anchor, now=now)
     return reader, new, Reading(folder=folder, fetched=now, meters=list(parsed.meters), flags=list(parsed.flags),
                         uuid=after, source="service")
+
+
+def _legacy_checks_out(anchor: dict, weekly: datetime, others: Dict[str, int], unlearned_others: bool) -> bool:
+    """R-10: the unsuffixed item names no account, so its reading must pass the fingerprint on
+    what the engine already knows, never by reading the token. A learned minute must match. With
+    none learned, the reading is taken (and starts learning) only when it cannot be another
+    account's: every other account's minute is known and it matches none of them."""
+    if anchor.get("minute_of_week") is not None:
+        return identity.matches_own(anchor, weekly)
+    return not unlearned_others and identity.foreign_match(weekly, others) is None
 
 
 def _group(accounts: List[str], uuids: Dict[str, Optional[str]]) -> List[Tuple[str, List[str], Optional[str]]]:

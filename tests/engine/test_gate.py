@@ -388,6 +388,62 @@ class TestRefresh(RefreshCase):
         self.assertEqual(acc.error.other, self.b)             # RULING 31: the matched account is named
         self.assertEqual(s.fetched_tokens, ["ta"])            # b was fresh: not fetched
 
+    def _legacy_run(self, *, own_anchor=None, other_anchor=None, weekly="2026-11-28T18:00:00+00:00"):
+        leg = str(self.home.home / ".claude-legacy")
+        stored = {}
+        if own_anchor is not None:
+            stored[leg] = fresh(at=T0 - timedelta(hours=1), reset_anchor=own_anchor)
+        stored[self.b] = fresh(at=T0, reset_anchor=other_anchor or identity.new_anchor())
+        LiveStore(self.io.store_io()).save(self.state, gate_live(stored))
+        s = Script(self.io, self.state, logins={leg: "ta", self.b: "tb"}, uuids={leg: ["u1"], self.b: ["u2"]},
+                   replies={"ta": [reply(40, weekly_reset=weekly)]}, observe=identity.observe)
+        return leg, gate.refresh(self.state, [leg, self.b], manual=False, deps=s.deps()).live.account(leg)
+
+    def test_legacy_reading_never_teaches_a_new_minute(self):
+        """Review-engine 4 (R-10): the unsuffixed item names no account. With a learned minute, its
+        reading must match it; a different minute is discarded and counts toward nothing."""
+        sat = timeutil.minute_of_week(timeutil.parse_iso("2026-11-28T18:00:00+00:00"))
+        own = {"minute_of_week": sat, "confirmations": 3, "candidate": None, "candidate_count": 0}
+        leg, acc = self._legacy_run(own_anchor=own, weekly="2026-11-29T03:00:00+00:00")
+        self.assertEqual(acc.error.kind, "identity_foreign_reset")
+        self.assertIsNone(acc.error.other)
+        self.assertEqual(acc.reset_anchor, own)                    # no candidate counted
+        self.assertEqual(acc.data, {"meters": []})                 # last good kept
+        self.assertIsNotNone(acc.blocked_until)
+
+    def test_legacy_reading_matching_its_own_minute_is_accepted(self):
+        sat = timeutil.minute_of_week(timeutil.parse_iso("2026-11-28T18:00:00+00:00"))
+        own = {"minute_of_week": sat, "confirmations": 3, "candidate": None, "candidate_count": 0}
+        leg, acc = self._legacy_run(own_anchor=own)
+        self.assertIsNone(acc.error)
+        self.assertEqual(acc.data, reply(40))
+        self.assertEqual(acc.reset_anchor["confirmations"], 4)
+
+    def test_legacy_reading_unchecked_while_another_account_is_unlearned(self):
+        """Nothing learned for this account and another account's minute unknown: the reading could
+        be that account's, so it is discarded and teaches nothing."""
+        leg, acc = self._legacy_run()
+        self.assertEqual(acc.error.kind, "identity_foreign_reset")
+        self.assertIsNone(acc.data)
+        self.assertEqual(acc.reset_anchor, identity.new_anchor())
+
+    def test_legacy_reading_learns_when_every_other_account_is_known(self):
+        """Every other account's minute is learned and this reading matches none: it cannot be
+        theirs, so it is accepted and starts learning (a Mac whose only login is the old item)."""
+        other = {"minute_of_week": 6300, "confirmations": 2, "candidate": None, "candidate_count": 0}
+        leg, acc = self._legacy_run(other_anchor=other)
+        self.assertIsNone(acc.error)
+        self.assertEqual(acc.data, reply(40))
+        self.assertEqual(acc.reset_anchor["candidate_count"], 1)
+
+    def test_legacy_only_account_on_its_own_learns(self):
+        leg = str(self.home.home / ".claude-legacy")
+        s = Script(self.io, self.state, logins={leg: "ta"}, uuids={leg: ["u1"]},
+                   replies={"ta": [reply(40)]}, observe=identity.observe)
+        acc = gate.refresh(self.state, [leg], manual=False, deps=s.deps()).live.account(leg)
+        self.assertIsNone(acc.error)
+        self.assertEqual(acc.reset_anchor["candidate_count"], 1)
+
     def test_same_reset_as_another_account_never_locks_a_hashed_item_out(self):
         """Review-engine 3: two accounts whose weekly resets coincide (a global reset moves both).
         A hashed item's reading passed the uuid check, so it is accepted and relearns the minute."""
