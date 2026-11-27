@@ -1,0 +1,16 @@
+/* The Report dialog drawn by report.js. Needs glow.css for the variables and .hk-btn. */
+.hk-report-overlay{position:fixed;inset:0;z-index:9001;display:none;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.55);font-family:var(--face-font);}
+.hk-report-overlay.show{display:flex;}
+.hk-report-panel{width:min(440px,92vw);padding:18px;display:flex;flex-direction:column;gap:10px;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;color:var(--text-hi);
+  box-shadow:0 18px 60px rgba(0,0,0,.7);}
+.hk-report-title{font-size:15px;font-weight:700;}
+.hk-report-line{font-size:13px;color:var(--text-lo);}
+.hk-report-text{min-height:120px;resize:vertical;padding:8px;border-radius:6px;font:14px/1.4 var(--face-font);
+  color:var(--text-hi);background:var(--panel-deep);border:1px solid rgba(var(--accent-rgb),.5);
+  -webkit-user-select:text;user-select:text;}
+.hk-report-text:focus{outline:2px solid var(--accent);outline-offset:1px;}
+.hk-report-status{min-height:1.2em;font-size:12px;color:var(--accent);}
+.hk-report-foot{display:flex;align-items:center;gap:8px;}
+.hk-report-sp{flex:1;}

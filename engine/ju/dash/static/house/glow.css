@@ -1,0 +1,43 @@
+/* THE HOUSE LOOK FOR A WEB FACE: the accent, the dark base and the Artemis glow.
+   Lifted from artemis/app/src/faceplate/shared.css + faceplate.css (.lcd-hero .value).
+   Dark only. One accent, set once here and re-set at run time by accent.js (the user's pick):
+   every colour below derives from --accent-rgb, so a new pick recolours the page and its glow together.
+   Illumination only when active: nothing glows unless it carries .lit (or .glow-text / .glow-box). */
+:root{
+  color-scheme:dark;
+  --accent:#ffb020; --accent-rgb:255,176,32;        /* house amber (Artemis). accent.js overwrites both. */
+  --accent-ink:#000;                                 /* text on an accent fill; accent.js picks black or white */
+  /* THE GLOW'S STRENGTH. 1 / 1 = Artemis full, the look of a web faceplate.
+     A native-feeling page that wants the quiet native glow sets .12 and .06 (J 2026-11-18). */
+  --glow-opacity-scale:1;
+  --glow-radius-scale:1;
+  --glow-text:0 0 calc(6px * var(--glow-radius-scale)) rgba(var(--accent-rgb),calc(.6 * var(--glow-opacity-scale))),
+              0 0 calc(16px * var(--glow-radius-scale)) rgba(var(--accent-rgb),calc(.4 * var(--glow-opacity-scale)));
+  --glow-box:0 0 calc(5px * var(--glow-radius-scale)) rgba(var(--accent-rgb),calc(.45 * var(--glow-opacity-scale)));
+  --base:#1e1e1e; --panel:#141414; --panel-deep:#050505;
+  --text-hi:rgba(238,238,242,.9); --text-lo:rgba(235,235,240,.5); --text-faint:rgba(235,235,240,.28);
+  --line:rgba(255,255,255,.1);
+  --red:#e2372c; --red-rgb:226,55,44;
+  --green:#3ddc7a;
+  --face-font:"Helvetica Neue",Helvetica,Arial,sans-serif;
+}
+/* High Contrast (accent.js sets it on <html>): brighter text, no glow. Lit shapes stay. */
+:root.high-contrast{
+  --glow-opacity-scale:0;
+  --text-lo:rgba(240,240,244,.85); --text-faint:rgba(240,240,244,.6);
+}
+.upx{text-transform:uppercase;letter-spacing:.12em;}
+.glow-text,.lit.glow-text{color:var(--accent);text-shadow:var(--glow-text);}
+.glow-box,.lit.glow-box{box-shadow:var(--glow-box);}
+/* A control that lights: dim until .lit. */
+.lamp{color:var(--text-lo);transition:color .12s, text-shadow .12s, box-shadow .12s;}
+.lamp.lit{color:var(--accent);text-shadow:var(--glow-text);}
+/* The two house buttons: a solid accent fill (the one main action) and a 1px accent border (every other). */
+.hk-btn{font:600 13px/1 var(--face-font);padding:7px 12px;border-radius:6px;cursor:pointer;
+  color:var(--accent);background:rgba(var(--accent-rgb),.08);border:1px solid rgba(var(--accent-rgb),.85);
+  -webkit-user-select:none;user-select:none;}
+.hk-btn:hover{background:rgba(var(--accent-rgb),.16);}
+.hk-btn:active{background:rgba(var(--accent-rgb),.22);}
+.hk-btn.primary{color:var(--accent-ink);background:var(--accent);border-color:rgba(0,0,0,.12);box-shadow:var(--glow-box);}
+.hk-btn[disabled]{opacity:.4;cursor:default;box-shadow:none;}
+.hk-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
