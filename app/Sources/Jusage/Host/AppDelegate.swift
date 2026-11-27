@@ -230,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func engineCommand(_ args: [String]) async -> RunResult {
         guard let e = engine else { return .failed(line: refusal?.line ?? "jusage: the engine is not ready", exit: 2) }
         let r = await FeedRunner.run(python: e.python, script: e.script, args: args, stateDir: e.stateDir)
-        if case .ok = r { scheduler?.request(.manual) }
+        if case .ok = r { scheduler?.request(.settingsChanged) }
         else { log.error("engine", "\(args.joined(separator: " ")) failed: \(Self.describe(r))") }
         return r
     }
