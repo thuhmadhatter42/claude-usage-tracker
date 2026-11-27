@@ -25,6 +25,20 @@ final class FoldsTests: XCTestCase {
         XCTAssertEqual(people(f, s).map(\.id), ["c3d4"])
     }
 
+    func testPeerWithEmptyFoldersAndAcctKeyStillShowsItsAccounts() throws {
+        let f = try Fixture.feed { j in
+            var p = j["people"] as! [[String: Any]]
+            var accounts = p[0]["accounts"] as! [[String: Any]]
+            accounts[0]["key"] = "acct:11111111-2222-3333-4444-555555555555"
+            accounts[0]["folders"] = [String]()
+            p[0]["accounts"] = accounts
+            j["people"] = p
+        }
+        let accounts = people(f)[0].accounts
+        XCTAssertFalse(accounts.isEmpty)
+        XCTAssertEqual(accounts[0].id, "acct:11111111-2222-3333-4444-555555555555")
+    }
+
     func testPersonGreysAt15Minutes() throws {
         let fresh = people(try Fixture.feed(), now: Fixture.date("2026-11-26T21:52:59-08:00"))[0]
         XCTAssertFalse(fresh.stale)
