@@ -1,201 +1,235 @@
-# claude-usage-tracker
+# claude-usage-tracker (jusage)
 
-Tracks Claude Code token usage on a Mac, per account, and can share a daily summary with the
-people you split a plan with, so it shows who used what. Python 3 stdlib only, plus a small Swift
-menu bar app. No daemon, no third-party packages, no server of its own.
+A menu bar app and a command line that show how much of Claude's 5-hour and 7-day limits you have
+used, per account, and, if you share a plan with other people, who used what. The app is native
+(Swift, macOS 13 or newer); the engine behind it is Python 3.9+ standard library only. No daemon, no
+third-party packages, no server of its own.
+
+## Reading the meters
+
+Every meter is one bar. The key:
+
+| Part of the bar | Meaning |
+|---|---|
+| **Bright fill** | What you have used now, as Claude reports it. |
+| **Dark fill** (beyond the bright) | Where you land at the reset if you keep the pace you have had so far in this period. A straight-line forecast from Claude's own percentage and the clock; there is no forecast in the first 3% of a period. |
+| **White line** | Where you would be if you were exactly on pace: the share of the period that has gone. |
+| **Grey** (whole bar and number) | The reading is 15 minutes old or older. The last value stays visible; hover for its age and the reason. |
+
+Colour: **red** when used is 97% or more; **amber** when used is past the white line (ahead of pace),
+never in the first 3% of a period; **green** otherwise. The forecast never changes the colour, it
+only draws the dark fill and the "runs out" line in the hover.
+
+Hover a row for the sentence: what each part means with that meter's own numbers, the reset time, the
+source and age of the reading ("from Claude Code, 40 s ago" or "from Anthropic, 2 min ago"), and the
+forecast in words.
 
 ## What it does, and what it refuses to do
 
-- Reads every `~/.claude*/projects/**/*.jsonl` (all accounts on the machine, plus
-  `$CLAUDE_CONFIG_DIR`), dedupes by message + request id, stores in `~/.claude-usage/usage.db`.
-- Reports tokens by day / model / account / project, and by 5-hour window (Claude's rate-limit
-  shape). Local time.
-- Prices every call at Anthropic's first-party API rates (`pricing.json`) as a **relative
-  scale** for splitting a plan. Nobody on Max is billed that number.
-- `live` reads Claude's **own** 5-hour and 7-day meters (the same endpoint `/usage` inside Claude
-  Code uses), for every account on the Mac, using the login already in your Keychain. Nothing is
-  estimated: if the endpoint can't be reached the meter is simply absent. A reading whose reset
-  time has passed is refetched even inside the 15-minute cache, and until a fresh one lands the
-  countdown says "reset due" instead of flooring to `0h 00m`.
-- Each account is labelled by its **account email**, read out of Claude Code's own
-  `<config dir>/.claude.json` — nothing is fetched and no token is involved. Two people who split
-  a plan are logged into the same accounts, so the shared dashboard can show one meter per plan
-  account instead of the same account twice under two different names. A config dir with no login
-  yet falls back to `<you> #1`, `#2` as before.
-- `share` writes `<you>@<host>-<id>.json` (`<id>` = four random characters made once per install, so two people with the same name and Mac name never overwrite each other) into a folder you sync with the others (iCloud, Syncthing,
-  Dropbox, a shared drive). `dashboard` builds one HTML page from every JSON there. What that
-  file contains is listed under **Security and privacy** below; project folder names are
-  included only if you ask for them.
+- Reads every `~/.claude*/projects/**/*.jsonl` (all accounts on the Mac, plus `$CLAUDE_CONFIG_DIR`)
+  for token counts, de-duplicated by message and request id, into `~/.claude-usage/usage.db`.
+  Message text is never stored.
+- Reports tokens and cost by day, model, account, project and 5-hour window. Local time.
+- **Cost is an API-rate equivalent, not your bill.** Each call is priced at Anthropic's first-party
+  API list rates (`pricing.json`) as a relative scale for splitting a plan. Nobody on a Max or Pro
+  plan is charged that number.
+- Reads Claude's **own** 5-hour, 7-day and per-model meters from one place, Anthropic's usage
+  service (`api.anthropic.com/api/oauth/usage`, the endpoint Claude Code's `/usage` uses), for every
+  account on the Mac. The percentages and reset times are Claude's; only the forecast is jusage's
+  estimate. If a reading can't be had the number stays at its last good value and greys, never
+  invented.
+- Labels each account by its email, read from Claude Code's own `<config dir>/.claude.json`, and
+  checks that identity before and after every read. A reading is thrown away if the account changed
+  under it, or if its weekly reset matches another account's.
+- Reads each account no more often than every 60 seconds by default (15 s to 10 min,
+  `jusage config read-every <seconds>` or the app's settings). A rate limit (`Retry-After`) or
+  backoff always wins over that cadence.
+- `share` writes `<you>@<host>-<id>.json` into a folder you sync with the others. `<id>` is four
+  random characters made once per install. `dashboard` builds one HTML page from every file there.
+  What the file holds is listed under **Security and privacy**.
 
-## Install (Mac)
+## Install
 
-Paste this into Terminal:
+Needs macOS 13 or newer, a network connection, and your home folder. Paste into Terminal:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/thuhmadhatter42/claude-usage-tracker/main/install.sh | bash
 ```
 
-No questions. It installs to `~/jusage`, runs the first scan, builds the menu bar app into
-`/Applications`, opens it, and adds the `jusage` command to your shell. The only thing that can stop
-it is Apple's Command Line Tools being missing: Apple's own install window opens, you click
-Install, the script continues by itself. Re-running it upgrades in place; so does `jusage upgrade`.
+No questions. It downloads the latest signed and notarized release, checks it with `spctl`, copies
+`jusage.app` to `/Applications` (to `~/Applications` when `/Applications` is not writable, and it
+says so), runs the first scan, adds the `jusage` command to your shell and opens the app. It needs
+Apple's Command Line Tools (Python 3.9+ ships with them); if they are missing Apple's install window
+opens, you click Install, and the script continues by itself, giving up after 15 minutes if the
+dialog is cancelled. Re-running it upgrades in place; so does `jusage upgrade`.
 
-Sharing with the people you split a plan with is the one thing it cannot guess. Either pass it in:
+Options, after `bash -s --`:
+
+| Option | Meaning |
+|---|---|
+| `--reports <folder>` | Share into this synced folder (remembered). |
+| `--user <name>` | Your name as the others see it. Default: the first word of this Mac account's full name. |
+| `--projects` | Also share project folder names (remembered, with or without `--reports`). |
+| `--from-source <dir>` | Install from a clone of this repo instead of downloading a release (see below). |
+| `--no-launch` | Do not open the app afterwards. |
+| `-h` | List the options. |
+
+An option given without its value stops with a message. Example:
 
 ```sh
-curl -fsSL …/install.sh | bash -s -- --user "Sam" --reports "<synced folder>/claude-usage/reports"
+curl -fsSL https://raw.githubusercontent.com/thuhmadhatter42/claude-usage-tracker/main/install.sh \
+  | bash -s -- --user "Sam" --reports "<synced folder>/claude-usage/reports"
 ```
 
-or run `jusage share --reports "<synced folder>/claude-usage/reports"` any time later.
-`install.sh --help` lists the options. A downloaded copy of the repo can be installed by
-double-clicking `install.command` instead (right-click → Open if macOS objects).
+You can also share later: `jusage share --reports "<synced folder>/claude-usage/reports"`. A
+downloaded copy of the repo can be installed by double-clicking `install.command`.
 
-## If an agent is installing this for you
+### From source (macOS 12, or Linux for the command line only)
+
+The app needs macOS 13. On macOS 12, or on Linux where only the command line and dashboard run:
+
+```sh
+git clone https://github.com/thuhmadhatter42/claude-usage-tracker ~/jusage
+python3 ~/jusage/engine/claude_usage.py config python "$(command -v python3)"
+python3 ~/jusage/engine/claude_usage.py scan
+```
+
+`config python` records the interpreter the `jusage` command runs; link `~/jusage/engine/bin/jusage`
+somewhere on your `PATH` to use it. A source copy upgrades with `jusage upgrade` (a `git pull`).
+`install.sh --from-source <dir>` does the same on a Mac and builds nothing; the folder must sit
+inside your home folder, and a non-empty folder that is not a jusage install is refused.
+To build the app yourself: `app/build-app.sh dist`, then copy `dist/jusage.app` into `/Applications`.
+
+### If an agent is installing this for you
 
 Hand your agent **[AGENT-SETUP.md](AGENT-SETUP.md)**. It tells the agent what to say to you first
-(the four privacy points below), what to ask (your name, the shared folder), the one install
-command, and how to prove the install works before it stops.
+(the privacy points below), what to ask (your name, the shared folder), the one install command,
+and how to prove the install works before it stops.
 
 ## Use
 
 ```sh
-jusage                          # scan + last 7 days + 5-hour windows, then share + open dashboard
-jusage live                     # Claude's own 5h / 7d meters, per account
+jusage                          # scan, live meters, last 7 days, 5-hour windows; then share + open the dashboard if a folder is set
+jusage live                     # Claude's own meters, per account   (--force: read now; --raw: also the stored replies)
 jusage report --since 30d --by model
-jusage report --by blocks       # 5-hour windows, newest last
-jusage report --by account      # per ~/.claude* dir
+jusage report --by blocks --last 6     # 5-hour windows, newest last
+jusage report --by account      # per ~/.claude* folder   (also --by day | project; --account <folder> for one)
+jusage scan [--full]            # read new transcripts (--full: re-read every file)
 jusage share --reports "<synced folder>/claude-usage/reports" --user <you>   # once, remembered
-jusage share --projects         # also share project folder names (remembered; --no-projects to stop)
-jusage update                   # scan + share + dashboard, no window — for a cron / launchd job
-jusage upgrade                  # git pull
-jusage app                      # menu bar app
-jusage help
+jusage share --projects         # also share project folder names (--no-projects stops it)
+jusage set-user <name>          # rename yourself in shared reports
+jusage dashboard [--out <file>] [--open]    # build the page from every shared report
+jusage update                   # scan + share + dashboard, no window: for a cron / launchd job
+jusage statusline on|off|status # the status-line backup, below
+jusage doctor                   # per account: Keychain items tried, identity, fetch gate, status line
+jusage menu-json                # the app's feed on stdout (schema 2)
+jusage config get [key]         # also: config read-every <seconds>, config python <path>
+jusage app                      # open the menu bar app
+jusage upgrade                  # app: checks for a signed update; source copy: git pull
+jusage uninstall                # restore status-line commands, then move jusage to the Trash
+jusage --version                # also: jusage help
 ```
 
-Without the alias every command is `~/jusage/jusage ...`; the engine is `python3 claude_usage.py ...`.
+Every command takes `--state-dir <folder>` before it to use a state folder other than
+`~/.claude-usage`. Without the alias, the command is `engine/bin/jusage` in the install, and the
+engine is `python3 engine/claude_usage.py`. A refused start prints one line,
+`jusage: <file>: <problem>`, and exits 2; any other failure prints one line and exits 1, with the full
+trace in `~/.claude-usage/logs/engine.log`.
 
-## Menu bar app
+## The menu bar app
 
-The installer also compiles `jusage.app` (Swift, needs only the Command Line Tools). It sits in
-the menu bar showing the 5-hour meter (or today's tokens until `jusage live` has run), and drops down
-a panel with Claude's own limits as channel meters, today's tokens / cost / calls / current window,
-the busiest models and projects, plus everyone else who shares into the same reports folder. Refreshes every
-5 minutes, ⌘R to force. The sliders icon (⌘,) opens Customize: theme, which people / accounts /
-sections to show, open at login. Launch with `jusage app`.
+It sits in the menu bar showing your meters and drops down a panel: Claude's own limits as bars
+(key above), how much of the week each session uses, today's tokens and spend, the busiest models and
+projects, and everyone else who shares into the same folder. Refresh with ⌘R, open the dashboard with
+⌘D, settings with ⌘,, and step the month in the history views with ⌥← and ⌥→. While it runs it also rewrites your shared report and the dashboard when they
+are stale, so everybody's page stays current. If that write fails (the synced folder is offline), the
+panel keeps its numbers and shows the reason on one line.
 
-While the app is running it also **rewrites your shared report and the dashboard** whenever they are
-more than 20 minutes old, so everybody's page stays current without anyone remembering to run
-anything. If that write fails (the synced folder is offline, say) the menu bar keeps its numbers and
-shows the reason as one amber line. `jusage update` is still there for a cron / launchd job on a Mac
-that does not run the app.
+Settings: theme, which people, accounts and sections to show, how often to read (15 s to 10 min),
+colouring the menu bar number by the account's worst meter (off by default), notifications, open at
+login, and the status-line backup.
+
+## The status-line backup (opt-in, off by default)
+
+Claude Code can hand a status-line command the account's current 5-hour and weekly usage on every
+response. With the backup on for an account, jusage takes those numbers as that account's **primary**
+reading: each capture that passes the identity checks and is newer than the stored reading becomes the
+reading, so while you are using Claude Code jusage barely needs to call Anthropic at all. The usage
+service is read only when no accepted capture arrived within the cadence (Claude Code idle), on a
+manual refresh, and about every 10 minutes to keep the per-model weeklies fresh, because the status
+line carries only session and weekly. A capture that fails the checks (wrong account, weekly reset
+matching another account's) is ignored.
+
+Turn it on from the app's settings or with `jusage statusline on` (`--folder <key>` for one account,
+`--all` for every one; `status` shows where it stands). It adds to your existing status line and never
+replaces it: the original command is recorded exactly, `settings.json` is copied to
+`~/.claude-usage/archive/`, and the command becomes the wrapper followed by `-- <your original>`. The
+wrapper saves the rate limits (never the model, prompt or any text), then runs your command with the
+same input and passes its output and exit code through unchanged. `jusage statusline off` and
+`jusage uninstall` restore the original string exactly. An unparsable `settings.json` is refused and
+left untouched, as is turning off when someone else has since changed the command.
 
 ## Who used it
 
-Claude's 5-hour and 7-day meters belong to an **account**, not to a person: two people on one plan
-see one percentage and no clue whose it is. So under each meter jusage shows the split — `this
-period: Sam 71% ($412) · Lee 29% ($168)`. It is each person's api-equivalent spend inside that
-meter's own period (its reset time, back five hours or seven days), added up from the 5-hour windows
-everybody's shared report already carries; a window the period boundary cuts counts by the fraction
-inside it. It is deliberately a share of *spend*, never of the percentage: how Anthropic weights the
-percentage is nobody's to guess. Someone whose jusage predates 0.1.22 labels their accounts
-`<them> #1` instead of by account email, so nothing of theirs can line up — they show as
-`not reported yet (update jusage)` rather than being silently counted as zero.
+Claude's meters belong to an **account**, not a person: two people on one plan see one percentage
+and no clue whose it is. Under each meter jusage shows the split, like `this period: Sam 71% ($412)
+· Lee 29% ($168)`. It is each person's API-equivalent spend inside that meter's own period (its
+reset time, back five hours or seven days), added up from everybody's shared 5-hour windows; a
+window the period boundary cuts counts by the fraction inside it. It is a share of *spend*, never of
+the percentage: how Anthropic weights the percentage is nobody's to guess. Someone on an older
+jusage whose report cannot be lined up shows as `not reported yet (update jusage)` rather than being
+counted as zero. Each session's share of the week is shown too: "This session: 4% of the week".
 
 ## Themes and what's on screen
 
 `themes.json` holds the themes (System, Paper, Graphite, Console, Midnight, Sand, Mono) for both the
-menu bar app and the dashboard. The dashboard's **Customize** button (top right) picks a theme and
-shows or hides people, accounts, sections and single charts; it is saved in that browser only, so
-everyone sees the same page and each of us picks a view. Add a theme by adding a block to
+app and the dashboard. The dashboard's **Customize** button picks a theme and shows or hides people,
+accounts, sections and single charts; it is saved in that browser only. Each Mac writes its own
+`~/.claude-usage/dashboard.html` from the shared reports folder. Add a theme by adding a block to
 `themes.json` and its id to `order`.
 
 ## Security and privacy
 
 Read this before pointing it at your own login.
 
-- **What it reads.** Your Claude Code transcripts (`~/.claude*/projects/**/*.jsonl`) for token
-  counts only; the message text is never stored. Your claude.ai login from the macOS Keychain
-  (item `Claude Code-credentials…`) or `~/.claude*/.credentials.json`, only for `live` and the
-  menu bar app. macOS may ask you to allow `security` / python to read that item; that prompt is
-  the Keychain doing its job.
-- **Where the token goes.** Two places, both Anthropic, both HTTPS with certificate checks and
-  redirects refused: `api.anthropic.com/api/oauth/usage` (the same endpoint Claude Code's own
-  `/usage` uses). Nothing else is contacted.
-- **The Keychain is read, never written.** For each config dir jusage reads every item Claude
-  Code might have written the login to (`Claude Code-credentials-<hash>` under each spelling of the
-  path, plus the unsuffixed `Claude Code-credentials` for `~/.claude` only) and uses the login that
-  expires furthest in the future. `jusage doctor` prints exactly which items were tried and which
-  one is in use. The unsuffixed item names no account, so when it is the one in use the meter
-  carries a warning; on a Mac with several accounts, `claude /login` in `~/.claude` clears it.
-  An expired login is reported, never renewed: renewing rotates the
-  refresh token behind Claude Code's back, and versions before 0.1.18 that wrote it back truncated
-  the Keychain item (`security` caps a secret read from stdin at 128 bytes) and logged the account
-  out. Open a Claude Code window on that account and the meter comes back on its own. If you
-  would rather the tool never touch your login at all, don't run `live` or the menu bar app;
+- **The Keychain is read-only, and that is all it ever is.** jusage finds each account's login in the
+  macOS Keychain item `Claude Code-credentials-<first 8 hex of sha256 of the config folder path>`,
+  the name Claude Code itself uses, trying the folder's spellings in a fixed order; the first item
+  that holds a login wins. The unsuffixed `Claude Code-credentials` item names no account, so it is
+  read only for the default `~/.claude`, only when no hashed item holds a login, and its readings
+  must pass both identity checks or are discarded; when it is used, the hover and `jusage doctor`
+  warn. jusage never writes, edits, renews or deletes a Keychain item, never refreshes a token
+  (rotating it would log Claude Code out), and never prints or logs one. An expired login is
+  reported ("Open Claude Code on this account, then refresh") and comes back on its own once Claude
+  Code renews it. macOS may ask you to allow jusage to read an item; that prompt is the Keychain
+  doing its job, and a read that waits more than 30 seconds is stopped with a message saying a prompt
+  may be waiting. Never want it near your login? Skip `live`, the app and the status-line backup;
   `scan`, `report`, `share` and `dashboard` never read it.
-- **What stays on this Mac.** `~/.claude-usage/` (the SQLite DB, `config.json`, `live.json`) is
-  created `0700` and every file in it `0600`; no token is ever written there, printed, or logged.
+- **What it reads.** Your Claude Code transcripts, for token counts only. The login above, or
+  `~/.claude*/.credentials.json` where Claude Code keeps one, only to read the meters.
+- **Where the token goes.** One place: `api.anthropic.com/api/oauth/usage` over HTTPS with
+  certificate checks and redirects refused. Nothing else is contacted, apart from the update check
+  and the release download, which carry no login.
+- **What stays on this Mac.** `~/.claude-usage/` (the SQLite DB, `config.json`, `live.json`, logs,
+  status-line captures) is created `0700` and every file in it `0600`. No token is ever written there.
 - **What `share` sends to the synced folder.** `<you>@<host>-<id>.json`: your chosen name, this Mac's
-  short hostname, the tool version, your account labels — **the email address and account id of each
-  claude.ai account you are logged into**, which is what lets the dashboard show one meter per plan
-  account rather than the same account twice (a config dir with no login stays `<you> #1`) — 90 days of per-day
-  totals (tokens, calls, cost at API list price) by model and by account, the last 50 five-hour
-  windows per account with their local start and end times (that is a working-hours log; know
-  that before sharing with people who should not have it), and Claude's current meters with their
-  reset times. **Project folder names are not included unless you run `jusage share --projects`.**
-  Never paths, session titles, prompts, file names or content. The dashboard renders exactly that
-  and nothing more. Day totals in the shared file are the reporter's own local calendar days —
-  not normalized to a shared time zone.
+  short hostname, the install id and tool version, your account labels, which are **the email
+  address and account id of each claude.ai account you are logged into**, 90 days of per-day totals
+  (tokens, calls, API-equivalent cost) by model and account, the last 50 five-hour windows per
+  account with their local start and end times (that is a working-hours log; know that before sharing
+  with people who should not have it), and Claude's current meters with their reset times. **Project
+  folder names are not included unless you run `jusage share --projects`.** Never paths, session
+  titles, prompts, file names or content. Day totals are the reporter's own local calendar days.
 - **Your own account, at your own risk.** This uses your subscription login from outside Claude
-  Code. It only reads the usage endpoint with the token Claude Code already holds, but
-  Anthropic's terms for third-party use of subscription logins are theirs to change; run it on
-  your own account only.
-- **Install folder.** The installer refuses to install outside your home folder or into a folder
-  that already holds something else, because the menu bar app runs the script from that folder
-  every five minutes.
+  Code. It reads only the usage endpoint with the token Claude Code already holds, but Anthropic's
+  terms for third-party use of subscription logins are theirs to change; run it on your own account
+  only.
+- **Install location.** `--from-source` and the app's engine refuse a folder outside your home, or a
+  non-empty folder that holds something else, because the app runs code from there.
 
 Found something? Open an issue, or for anything sensitive email the address on the GitHub profile.
 
-## Upgrading to 0.1.31
-
-Nothing to do beyond `jusage upgrade`. The login lookup is exhaustive (every Keychain item Claude
-Code could have used, freshest login wins) and `jusage doctor` exists — per config dir, which
-Keychain items were tried and which one is in use — so a meter that says "no login" or STALE has a
-printable reason instead of a guess.
-
-The dashboard is now written to `~/.claude-usage/dashboard.html` **on each Mac**: every Mac renders
-its own page from the shared reports folder, instead of every Mac racing to rewrite one shared
-`dashboard.html`. The old shared `dashboard.html` that used to sit next to the reports folder can
-be deleted; `jusage dashboard --out <path>` still writes the page anywhere you ask. Reports in the
-shared folder are now matched by each install's own id rather than by name + hostname, so renaming
-this Mac or running `jusage set-user` no longer leaves a duplicate person behind in the shared
-folder.
-
-## Upgrading to 0.1.28
-
-Re-run the installer line from the top of this page. Two things change:
-
-- **Keychain fallback for the default `~/.claude`.** Some Claude Code builds (2.1.27x) keep that
-  dir's login in the unsuffixed `Claude Code-credentials` item and leave the hashed item with only
-  `mcpOAuth`, which made jusage label the account STALE while `claude` worked fine. jusage now
-  reads the hashed item first and, for `~/.claude` only, falls back to the unsuffixed item when the
-  hashed one has no `claudeAiOauth`. Any earlier note telling you to delete the unsuffixed item is
-  withdrawn: leave it alone, it may be your live login.
-- **Bundle id is now `com.goatdguild.jusage`.** The menu bar app's saved choices (theme, bar
-  choice, hidden rows) reset once, and if "open at login" was on, turn it on again in the app;
-  the old `com.goatedguild.jusage` login item can be removed in System Settings → General →
-  Login Items.
-
-## Upgrading to 0.1.22
-
-Nothing to do. On the first run your account labels change from `<you> #1` / `#2` to the account
-email, the old-named report in the shared folder is removed automatically (its replacement is
-`<you>@<host>-<id>.json`), and the menu bar's "what to show in the bar" choice falls back to its
-default once because the label it remembered no longer exists. Pick it again if you had changed it.
-Anyone still on an older version keeps working: their accounts are shown under their old labels with
-a note to upgrade.
-
 ## Versioning
 
-`VERSION` is the only place the number lives. Every edit bumps the last digit. Tags are
-`CUT-<version>`. Major and minor bumps are the maintainer's call.
+`VERSION` is the only place the number lives. Every ship (a release, not every edit) bumps the last
+digit; major and minor bumps are the maintainer's call. Tags are `CUT-<version>`.

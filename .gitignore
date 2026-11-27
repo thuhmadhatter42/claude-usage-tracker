@@ -6,3 +6,5 @@ jusage.app/
 *.tmp
 *.log
 build.log
+app/.build/
+dist/
