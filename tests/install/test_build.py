@@ -251,7 +251,11 @@ class TestReleaseConf(unittest.TestCase):
         self.assertIn("build-app.sh", text)
 
     def test_no_identity_or_team_tracked(self):
-        for f in [p for p in (h.ROOT / "scripts").rglob("*") if p.is_file()] + [h.ROOT / "app" / "build-app.sh"]:
+        # Tracked files only: a release run writes gitignored logs (scripts/logs/smoke-test.log) that name the signer.
+        tracked = subprocess.run(["git", "-C", str(h.ROOT), "ls-files", "scripts", "app/build-app.sh"],
+                                 capture_output=True, text=True, check=True).stdout.split()
+        self.assertIn("app/build-app.sh", tracked)
+        for f in [h.ROOT / p for p in tracked]:
             t = f.read_text(errors="ignore")
             self.assertNotRegex(t, r"Developer ID Application: [A-Za-z]", f.name)
             self.assertNotIn("9WTFGV63S2", t, f.name)
