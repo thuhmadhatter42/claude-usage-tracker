@@ -45,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updater = AppUpdater()
         statusItem = StatusItemController(
             maker: SystemStatusSlots(),
-            menuItems: { [unowned self] in JusageHouseMenu.items(updater: self.updater, quit: { NSApp.terminate(nil) }) },
+            menuItems: { [unowned self] in JusageHouseMenu.items(updater: self.updater, quit: { NSApp.terminate(nil) }, presentSheet: self.presentSheet) },
             leftClick: { [unowned self] in self.panel.toggle() },
             log: log)
 
@@ -84,6 +84,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         updater.checkInBackgroundAtLaunch()
         if args.checkForUpdates { updater.checkForUpdates() }
+    }
+
+    /// The kit's sheets hang off the panel window. A right-click menu item shows the panel (and activates the app)
+    /// first, so the sheet always has a visible window to open on; from the panel's own menu it is already up.
+    private func presentSheet(_ open: @escaping @MainActor () -> Void) {
+        if !panel.isShown { panel.show() }
+        open()
     }
 
     // MARK: bring-up
@@ -195,7 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openDashboard: { [unowned self] path in
                 if !NSWorkspace.shared.open(URL(fileURLWithPath: path)) { self.log.error("dashboard", "could not open \(path)") }
             },
-            houseMenu: StatusItemController.panelMenu(from: JusageHouseMenu.items(updater: updater, quit: { NSApp.terminate(nil) })),
+            houseMenu: StatusItemController.panelMenu(from: JusageHouseMenu.items(updater: updater, quit: { NSApp.terminate(nil) }, presentSheet: { [unowned self] in self.presentSheet($0) })),
             engine: { [unowned self] args in await self.engineCommand(args) },
             loginItem: LoginItemControl(isOn: { [unowned self] in self.loginItem.isOn },
                                         set: { [unowned self] on in self.loginItem.set(on) }),
