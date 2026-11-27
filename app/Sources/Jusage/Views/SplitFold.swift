@@ -48,8 +48,17 @@ enum DetailModel {
         }
     }
 
-    static func models(feed: Feed) -> [ValueRow] {
-        feed.models.prefix(4).map { ValueRow(id: $0.id, name: $0.name, text: "\(Fmt.tokens($0.tokens)) · \(Fmt.usd($0.usd))") }
+    static func models(feed: Feed, settings: AppSettings) -> [ValueRow] {
+        guard settings.isSectionShown(.models) else { return [] }      // "Busiest models" off: only these rows go
+        return feed.models.prefix(4).map { ValueRow(id: $0.id, name: $0.name, text: "\(Fmt.tokens($0.tokens)) · \(Fmt.usd($0.usd))") }
+    }
+
+    /// The fold shows while any of its parts has something to show: the plan split (no toggle), the open
+    /// windows, the busiest models.
+    static func isShown(feed: Feed, settings: AppSettings, time: DisplayTime) -> Bool {
+        !SplitModel.rows(feed: feed, settings: settings).isEmpty
+            || !windows(feed: feed, settings: settings, time: time).isEmpty
+            || !models(feed: feed, settings: settings).isEmpty
     }
 }
 
@@ -73,7 +82,7 @@ struct SplitFold: View {
                 ForEach(DetailModel.windows(feed: feed, settings: settings, time: time)) {
                     FoldRow(title: $0.name, value: $0.text, palette: palette)
                 }
-                ForEach(DetailModel.models(feed: feed)) { FoldRow(title: $0.name, value: $0.text, palette: palette) }
+                ForEach(DetailModel.models(feed: feed, settings: settings)) { FoldRow(title: $0.name, value: $0.text, palette: palette) }
             }
         }
     }

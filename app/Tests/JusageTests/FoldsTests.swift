@@ -108,9 +108,33 @@ final class FoldsTests: XCTestCase {
         }
         let t = ViewFixture.time()
         XCTAssertEqual(DetailModel.windows(feed: f, settings: AppSettings(), time: t).map(\.line), ["sam 19:00–Fri 00:00  6.2M · $21.40"])
-        XCTAssertEqual(DetailModel.models(feed: f).map(\.name), ["m0", "m1", "m2", "m3"])
+        XCTAssertEqual(DetailModel.models(feed: f, settings: AppSettings()).map(\.name), ["m0", "m1", "m2", "m3"])
         XCTAssertEqual(ProjectsModel.rows(feed: f).count, 5)
         XCTAssertEqual(ProjectsModel.rows(feed: try Fixture.feed()).map(\.text), ["75%", "25%"], "today's list, not the week's")
+    }
+
+    /// Review 8: "Busiest models" off hides only the models rows. The plan split and the windows stay, and the
+    /// fold itself stays while any of its parts is on.
+    func testBusiestModelsOffHidesOnlyTheModelsRows() throws {
+        let f = try Fixture.feed()
+        let t = ViewFixture.time()
+        var s = AppSettings()
+        s.hiddenSections = [.models]
+        XCTAssertTrue(DetailModel.models(feed: f, settings: s).isEmpty)
+        XCTAssertFalse(SplitModel.rows(feed: f, settings: s).isEmpty, "Alex's share of the week stays")
+        XCTAssertFalse(DetailModel.windows(feed: f, settings: s, time: t).isEmpty)
+        XCTAssertTrue(DetailModel.isShown(feed: f, settings: s, time: t))
+        // Everything in it off, and no split rows: no empty fold.
+        s.hiddenSections = [.models, .windows]
+        let noSplit = try ViewFixture.feed { a in
+            for i in a.indices {
+                var meters = a[i]["meters"] as! [[String: Any]]
+                for j in meters.indices { meters[j]["split"] = NSNull() }
+                a[i]["meters"] = meters
+            }
+        }
+        XCTAssertFalse(DetailModel.isShown(feed: noSplit, settings: s, time: t))
+        XCTAssertTrue(DetailModel.isShown(feed: f, settings: AppSettings(), time: t))
     }
 
     func testMetersAndWindowsSectionsGate() throws {
