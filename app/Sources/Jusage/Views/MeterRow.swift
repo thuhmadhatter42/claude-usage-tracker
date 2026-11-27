@@ -91,7 +91,7 @@ struct MeterRowModel: Equatable, Identifiable {
         case .grey: stateWord = "grey, not current"
         }
         let resetWord = resetPassed ? ", reset due" : (m.resetsAt.map { ", resets \(time.clock($0))" } ?? "")
-        let voiceOver = "\(m.name), \(whole(m.pct)) percent used, \(stateWord)\(resetWord)."
+        let voiceOver = "\(m.name), \(TitleModel.whole(m.pct)) percent used, \(stateWord)\(resetWord)."
 
         return MeterRowModel(id: m.id, label: settings.labels ? m.name : nil, used: used, shadow: shadow, line: line,
                              tone: tone, pctText: pct, countdown: Fmt.resetText(meter: m, now: time.now),

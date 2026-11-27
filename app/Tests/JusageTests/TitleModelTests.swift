@@ -108,4 +108,25 @@ final class TitleModelTests: XCTestCase {
         let late = make(try Fixture.feed(), s, at: now.addingTimeInterval(20 * 60))
         XCTAssertTrue(late[0].stale)
     }
+
+    /// Review 10 / R-44, R-196: colour decides on the true number (red at 97.0 and not at 96.9), so the shown
+    /// percent is floored. "97%" on screen always means red; "79%" never means a missed 80% warning.
+    func testShownPercentNeverRoundsUpAcrossARedOrWarnLine() {
+        XCTAssertEqual(TitleModel.pctText(96.9), "96%")
+        XCTAssertEqual(TitleModel.pctText(96.99), "96%")
+        XCTAssertEqual(TitleModel.pctText(97.0), "97%")
+        XCTAssertEqual(TitleModel.pctText(79.9), "79%")
+        XCTAssertEqual(TitleModel.pctText(80.0), "80%")
+        XCTAssertEqual(TitleModel.pctText(37), "37%")
+        XCTAssertEqual(TitleModel.pctText(0.4), "0%")
+        XCTAssertEqual(TitleModel.pctText(100), "100%")
+    }
+
+    func testMeterRowShowsTheSameWholeNumberEverywhere() throws {
+        let f = try ViewFixture.feed(account: 0, meter: 0) { $0["pct"] = 96.6 }
+        let a = f.accounts[0]
+        let r = MeterRowModel.make(meter: a.meters[0], account: a, feed: f, settings: AppSettings(), time: ViewFixture.time(), own: true)
+        XCTAssertEqual(r.pctText, "96%")
+        XCTAssertTrue(r.voiceOver.contains("96 percent"), r.voiceOver)
+    }
 }

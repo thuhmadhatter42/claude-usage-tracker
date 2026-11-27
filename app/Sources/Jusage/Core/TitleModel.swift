@@ -72,5 +72,9 @@ enum TitleModel {
         return TitleItem(text: pctText(m.pct), tag: tag, colour: colour, stale: stale, hover: lines.joined(separator: "\n"))
     }
 
-    static func pctText(_ pct: Double) -> String { String(format: "%.0f%%", pct) }
+    /// The whole percent shown everywhere (title, rows, notifications, VoiceOver): floored, never rounded, so it
+    /// agrees with colour, which compares the true number against red_at (R-44: used >= 97, R-196: 96.9 is not red).
+    static func whole(_ pct: Double) -> Int { Int((pct + 1e-9).rounded(.down)) }
+
+    static func pctText(_ pct: Double) -> String { "\(whole(pct))%" }
 }
