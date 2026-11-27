@@ -68,7 +68,7 @@ struct DoctorCheck: Identifiable {
     }
 
     let name: String
-    let run: () -> Result
+    let run: @Sendable () -> Result
     var id: String { name }
 }
 
@@ -146,12 +146,23 @@ final class DoctorCenter: ObservableObject {
 
     @Published var showing = false
     @Published private(set) var lines: [Line] = []
+    /// True while the checks are running off the main thread.
+    @Published private(set) var running = false
 
     var failures: Int { lines.filter { $0.result.state == .fail }.count }
 
-    func run(_ checks: [DoctorCheck] = HouseDoctor.standardChecks() + HouseDoctor.appChecks) {
-        lines = HouseDoctor.run(checks).map { Line(name: $0.name, result: $0.result) }
+    /// Shows the sheet at once and runs the checks off the main thread (the engine's doctor can wait 30 s on a
+    /// Keychain prompt); the answers are published on the main actor when they are all in.
+    @discardableResult
+    func run(_ checks: [DoctorCheck] = HouseDoctor.standardChecks() + HouseDoctor.appChecks) -> Task<Void, Never> {
+        lines = []
+        running = true
         showing = true
+        return Task { [weak self] in
+            let answers = await Task.detached { HouseDoctor.run(checks) }.value
+            self?.lines = answers.map { Line(name: $0.name, result: $0.result) }
+            self?.running = false
+        }
     }
 }
 
@@ -163,7 +174,7 @@ struct DoctorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(center.failures == 0 ? "Doctor: all good" : "Doctor: \(center.failures) to fix").font(.headline)
+            Text(center.running ? "Doctor: checking…" : center.failures == 0 ? "Doctor: all good" : "Doctor: \(center.failures) to fix").font(.headline)
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(center.lines) { line in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
