@@ -1,0 +1,90 @@
+# E16: the status-line wrapper. Run by Claude Code as
+#     <python> -E -s <engine>/jusage-statusline -- <original command>
+# Reads Claude Code's JSON once, saves the rate limits (E15), then runs the original command with
+# the same input and hands back its stdout, stderr and exit code untouched. A capture problem is
+# logged and never changes what the person sees. No original command: print nothing, exit 0.
+import os
+import select
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def main(argv):
+    rest = argv[1:]
+    if rest and rest[0] == "--":
+        rest = rest[1:]
+    original = " ".join(rest)
+    data = sys.stdin.buffer.read()
+    job = start_original(original, data) if rest else None     # runs while the capture is written
+    try:
+        from ju import statusline
+        statusline.capture(data, os.environ)
+    except BaseException as e:                       # never let a capture problem reach the status line
+        try:
+            from ju import houselog
+            houselog.log("error", "statusline: capture failed", error=f"{type(e).__name__}: {e}")
+        except BaseException:
+            pass
+    if job is None:
+        return 0
+    code, out, err = finish_original(job)
+    sys.stdout.buffer.write(out)
+    sys.stdout.buffer.flush()
+    sys.stderr.buffer.write(err)
+    sys.stderr.buffer.flush()
+    return code
+
+
+def start_original(command, data):
+    """Start `/bin/sh -c command` with `data` for its stdin; `finish_original(job)` collects it.
+    Starting first lets the original run while the capture is written.
+    Spawned directly, without the subprocess module: its import alone costs more than the
+    whole 50 ms budget this wrapper has on top of the original."""
+    in_r, in_w = os.pipe()
+    out_r, out_w = os.pipe()
+    err_r, err_w = os.pipe()
+    actions = [(os.POSIX_SPAWN_DUP2, in_r, 0), (os.POSIX_SPAWN_DUP2, out_w, 1), (os.POSIX_SPAWN_DUP2, err_w, 2)]
+    actions += [(os.POSIX_SPAWN_CLOSE, fd) for fd in (in_r, in_w, out_r, out_w, err_r, err_w)]
+    pid = os.posix_spawn("/bin/sh", ["sh", "-c", command], os.environ, file_actions=actions)
+    for fd in (in_r, out_w, err_w):
+        os.close(fd)
+    os.set_blocking(in_w, False)
+    return pid, in_w, out_r, err_r, memoryview(data)
+
+
+def finish_original(job):
+    """Feed the rest of stdin, drain stdout and stderr, wait; returns (exit code, out, err)."""
+    pid, in_w, out_r, err_r, pending = job
+    collected = {out_r: [], err_r: []}
+    reading = set(collected)
+    if not pending:
+        os.close(in_w)
+        in_w = None
+    while reading or in_w is not None:
+        readable, writable, _ = select.select(list(reading), [in_w] if in_w is not None else [], [])
+        for fd in readable:
+            block = os.read(fd, 65536)
+            if block:
+                collected[fd].append(block)
+            else:
+                os.close(fd)
+                reading.discard(fd)
+        for fd in writable:
+            try:
+                pending = pending[os.write(fd, pending):]
+            except BlockingIOError:
+                continue
+            except BrokenPipeError:
+                pending = pending[len(pending):]
+            if not pending:
+                os.close(fd)
+                in_w = None
+    _, status = os.waitpid(pid, 0)
+    out, err = b"".join(collected[out_r]), b"".join(collected[err_r])
+    code = 128 + os.WTERMSIG(status) if os.WIFSIGNALED(status) else os.WEXITSTATUS(status)
+    return code, out, err
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
