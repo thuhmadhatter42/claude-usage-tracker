@@ -379,6 +379,19 @@ class TestFromSource(Installer):
                            env=h.clean_env(self.home), capture_output=True, text=True)
         self.assertEqual(r.stdout.strip(), h.VERSION, r.stderr)
 
+    def test_shell_characters_in_path_refused(self):
+        """Review-security 7: the alias body is double-quoted, so $, `, " or \\ in the path would be
+        run or mangled each time `jusage` is typed. Such a folder is refused before anything happens."""
+        for name in ("x$(touch PWNED)", "x`touch PWNED`", 'x"y', "x\\y"):
+            with self.subTest(name):
+                target = self.home / name
+                rc, out = self.install("--from-source", str(target), "--no-launch", JUSAGE_REPO_URL=self.url)
+                self.assertEqual(rc, 1, out)
+                self.assertIn("must not contain", out)
+                self.assertFalse(target.exists())
+                self.assertFalse((self.home / ".zshrc").exists() and "alias jusage=" in (self.home / ".zshrc").read_text())
+        self.assertEqual(list(self.home.rglob("PWNED")) + list(self.tmp.glob("PWNED")), [])
+
     def test_existing_install_folder_is_updated_not_refused(self):
         target = self.home / "src"
         self.assertEqual(self.install("--from-source", str(target), "--no-launch", JUSAGE_REPO_URL=self.url)[0], 0)

@@ -148,6 +148,7 @@ if [ -n "$SOURCE_DIR" ]; then
   command -v git >/dev/null 2>&1 || die "git was not found. Install the Command Line Tools, then run this installer again."
   HOME_REAL="$(cd -P "$HOME" && pwd)"
   case "/${SOURCE_DIR}/" in */../*) die "The folder must not contain '..': $SOURCE_DIR (it has to be inside your home, $HOME_REAL)." ;; esac
+  case "$SOURCE_DIR" in *'$'*|*'`'*|*'"'*|*'\'*) die "The folder must not contain \$, \`, \" or \\ (the jusage alias would run them): $SOURCE_DIR" ;; esac
   DIR="$(resolve_loose "$SOURCE_DIR")"
   case "$DIR" in "$HOME_REAL"/?*) ;; *) die "The install folder must be inside your home ($HOME_REAL), e.g. ~/jusage; not $DIR." ;; esac
   if [ -d "$DIR" ] && [ -n "$(/bin/ls -A "$DIR" 2>/dev/null)" ] && [ ! -f "$DIR/engine/claude_usage.py" ] && [ ! -f "$DIR/claude_usage.py" ]; then
@@ -270,6 +271,7 @@ fi
 # ---------------------------------------------------------------- 7. the `jusage` command
 # The alias carries its own quotes; a ' in the path is escaped; the replacement goes through the environment
 # so no character of the path is ever interpreted by sed or awk.
+case "$CLI" in *'$'*|*'`'*|*'"'*|*'\'*) die "The jusage folder must not contain \$, \`, \" or \\ (the alias would run them): $CLI" ;; esac
 QUOTE="'\\''"
 ALIAS_LINE="alias jusage='\"${CLI//\'/$QUOTE}\"'"
 for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
