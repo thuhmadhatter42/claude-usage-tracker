@@ -13,7 +13,8 @@ jusage: Claude Code usage on this Mac (and everyone sharing a reports folder).
                       then share + open the dashboard when a shared folder is set
   jusage app          open the jusage menu bar app
   jusage upgrade      update: the app checks for a signed release; a source copy runs git pull
-  jusage uninstall    restore status-line commands, then move jusage to the Trash
+  jusage uninstall    restore status-line commands, switch off open-at-login, remove the
+                      jusage alias, then move jusage to the Trash
   jusage help         this text, then every engine command and option
   jusage <command>    any engine command, e.g. `jusage report --by model --since 30d`
 EOF
@@ -55,6 +56,24 @@ in_app() {              # the engine ships inside jusage.app/Contents/Resources/
     case "$ENGINE" in */Contents/Resources/engine) return 0 ;; *) return 1 ;; esac
 }
 
+remove_alias_lines() {  # the `alias jusage=` lines install.sh wrote; each original file is copied to the Trash first
+    local f name dest n tmp
+    for f in "$HOME/.zshrc" "$HOME/.bashrc"; do
+        [ -f "$f" ] || continue
+        /usr/bin/grep -Eq '^[[:space:]]*alias jusage=' "$f" || continue
+        name="$(/usr/bin/basename "$f")"
+        /bin/mkdir -p "$HOME/.Trash"
+        dest="$HOME/.Trash/$name"; n=0
+        while [ -e "$dest" ]; do n=$((n + 1)); dest="$HOME/.Trash/$name $n"; done
+        /bin/cp -p "$f" "$dest"
+        tmp="$f.jusage-uninstall.$$"
+        { /usr/bin/grep -Ev '^[[:space:]]*alias jusage=' "$f" || true; } > "$tmp"
+        /bin/cat "$tmp" > "$f"          # in place: a symlinked rc file stays a symlink
+        /bin/rm -f "$tmp"
+        echo "removed the jusage alias from ~/$name (the original is in the Trash as $(/usr/bin/basename "$dest"))"
+    done
+}
+
 case "${1:-}" in
     "")
         engine scan
@@ -88,17 +107,25 @@ case "${1:-}" in
         fi
         ;;
     uninstall)
+        # The app's Uninstall sheet, from Terminal (RULING 39): status line restored first (a failure stops
+        # here, before anything moves), the login item off, the alias lines gone, then the kit's script.
         shift
         if in_app; then
-            script="${ENGINE%/engine}/uninstall.sh"
+            app="${ENGINE%/Contents/Resources/engine}"
         else
-            script="/Applications/jusage.app/Contents/Resources/uninstall.sh"
+            app="/Applications/jusage.app"
         fi
+        script="$app/Contents/Resources/uninstall.sh"
         if [ ! -f "$script" ]; then
             echo "No uninstall script at $script; nothing was moved." >&2
             exit 1
         fi
         engine statusline off --all
+        if [ -x "$app/Contents/MacOS/Jusage" ]; then
+            "$app/Contents/MacOS/Jusage" --login-item-off \
+                || echo "Open at login could not be switched off; turn it off in System Settings → General → Login Items." >&2
+        fi
+        remove_alias_lines
         /bin/sh "$script" "$@"
         ;;
     help|-h|--help)

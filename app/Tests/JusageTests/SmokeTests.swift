@@ -63,6 +63,8 @@ final class SmokeTests: XCTestCase {
         let bare = LaunchArgs(["/x/Jusage", "--smoke-test"])
         XCTAssertNil(bare.smokeOutput)
         XCTAssertEqual(bare.problems, ["--smoke-test needs a file"])
+        XCTAssertTrue(LaunchArgs(["/x/Jusage", "--login-item-off"]).loginItemOff)
+        XCTAssertFalse(a.loginItemOff)
         XCTAssertEqual(LaunchArgs(["/x/Jusage", "--window"]).problems, ["unknown argument --window"], "--window is dropped")
         XCTAssertEqual(LaunchArgs(["/x/Jusage", "-NSDocumentRevisionsDebugMode", "YES"]).problems, [], "AppKit's own -NS… pairs pass")
     }

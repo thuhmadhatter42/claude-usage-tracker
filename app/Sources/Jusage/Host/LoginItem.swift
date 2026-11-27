@@ -37,4 +37,19 @@ struct LoginItem {
         log.info("login-item", on ? "on" : "off")
         return nil
     }
+
+    struct Outcome: Equatable {
+        let code: Int32
+        let line: String
+    }
+
+    /// `Jusage --login-item-off`: what `jusage uninstall` runs, since only the app itself can unregister its login
+    /// item (RULING 39). Not registered is not an error.
+    func switchOff() -> Outcome {
+        guard service.status == .enabled || service.status == .requiresApproval else {
+            return Outcome(code: 0, line: "Open at login was already off.")
+        }
+        if let why = set(false) { return Outcome(code: 1, line: why) }
+        return Outcome(code: 0, line: "Open at login is off.")
+    }
 }

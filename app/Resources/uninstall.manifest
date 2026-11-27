@@ -3,7 +3,7 @@
 # written without the leading ~/.
 #
 # NOT listed here, because the script only moves paths to the Trash (see JusageUninstall.swift, which runs
-# BEFORE this script; the `jusage uninstall` command does the first step itself):
+# BEFORE this script; the `jusage uninstall` command does the same three steps itself):
 #   1. `jusage statusline off --all`  (Claude Code's own status-line command is restored first)
 #   2. the login item is switched off
 #   3. the `alias jusage=` lines in ~/.zshrc and ~/.bashrc are removed (the original file goes to the Trash)

@@ -139,5 +139,56 @@ class Wrapper(unittest.TestCase):
         self.assertEqual(subprocess.run(["/bin/bash", "-n", str(WRAPPER)]).returncode, 0)
 
 
+class Uninstall(unittest.TestCase):
+    """RULING 39: `jusage uninstall` does what the app's Uninstall sheet does before the kit's script: status
+    line restored first (a failure stops everything), the login item switched off through the app, the alias
+    lines removed (originals to the Trash). Runs only inside a temp jusage.app, never the real one."""
+
+    def setUp(self):
+        self.h = support.temp_home()
+        self.addCleanup(self.h.cleanup)
+        self.log = self.h.home / "calls.log"
+        app = self.h.home / "Apps" / "jusage.app" / "Contents"
+        self.wrapper = app / "Resources" / "engine" / "bin" / "jusage"
+        self.wrapper.parent.mkdir(parents=True)
+        self.wrapper.write_text(WRAPPER.read_text())
+        (app / "MacOS").mkdir()
+        for path, name in ((app / "MacOS" / "Jusage", "app"), (app / "Resources" / "uninstall.sh", "uninstall.sh")):
+            path.write_text(f"#!/bin/sh\necho \"{name} $*\" >> '{self.log}'\n")
+            path.chmod(0o755)
+        self.py = self.h.home / "python3"
+        self.py.write_text(f"#!/bin/bash\necho \"python ${{*:5}}\" >> '{self.log}'\n"
+                           "[ \"$5 $6\" = \"statusline off\" ] && exit \"${STATUSLINE_RC:-0}\"\nexit 0\n")
+        self.py.chmod(0o755)
+        (self.h.state / "config.json").write_text(json.dumps({"python": str(self.py)}))
+        self.zshrc = "# mine\nalias jusage='/x/jusage'\nexport A=1\nalias jusager=keep\n"
+        (self.h.home / ".zshrc").write_text(self.zshrc)
+        (self.h.home / ".bashrc").write_text("alias jusage='/y/jusage'\n")
+
+    def run_w(self, *args, **env):
+        e = {"HOME": str(self.h.home), "PATH": "/usr/bin:/bin", **env}
+        return subprocess.run(["/bin/bash", str(self.wrapper), "uninstall", *args], env=e, capture_output=True,
+                              text=True, timeout=30)
+
+    def test_status_line_login_item_alias_then_script(self):
+        r = self.run_w("--keep-data")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.log.read_text().splitlines(),
+                         ["python statusline off --all", "app --login-item-off", "uninstall.sh --keep-data"])
+        self.assertEqual((self.h.home / ".zshrc").read_text(), "# mine\nexport A=1\nalias jusager=keep\n")
+        self.assertEqual((self.h.home / ".bashrc").read_text(), "")
+        trashed = sorted(p.name for p in (self.h.home / ".Trash").iterdir())
+        self.assertEqual(len(trashed), 2, trashed)
+        originals = sorted(p.read_text() for p in (self.h.home / ".Trash").iterdir())
+        self.assertIn(self.zshrc, originals)
+
+    def test_status_line_failure_stops_everything(self):
+        r = self.run_w(STATUSLINE_RC="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(self.log.read_text().splitlines(), ["python statusline off --all"])
+        self.assertEqual((self.h.home / ".zshrc").read_text(), self.zshrc)
+        self.assertFalse((self.h.home / ".Trash").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -56,13 +56,10 @@ check "a failed install leaves the installed app and the shell file as they were
   '[ -f "$APPS/jusage.app/marker" ] && cmp -s "$H/.zshrc" "$T/zshrc.before" && [ "$(footprint)" = "$FP1" ]'
 
 M="$ROOT/app/Resources/uninstall.manifest"
-if [ -f "$M" ] && [ -f "$ROOT/app/Resources/uninstall.sh" ]; then
-  check "the manifest removes the app where the installer put it (/Applications and ~/Applications)" \
+check "the app ships the uninstall manifest and script (H2)" '[ -f "$M" ] && [ -f "$ROOT/app/Resources/uninstall.sh" ]'
+check "the manifest removes the app where the installer put it (/Applications and ~/Applications)" \
     'grep -Eq "^[[:space:]]*app[[:space:]]+/Applications/jusage\.app" "$M" && grep -Eq "Applications/jusage\.app" "$M"'
-  check "the manifest covers the state folder the installer made" 'grep -Eq "(data|user)[[:space:]]+\.claude-usage" "$M"'
-else
-  echo "-- manifest checks: waiting for H2's app/Resources/uninstall.manifest (wave 3; the merge makes them mandatory)"
-fi
+check "the manifest covers the state folder the installer made" 'grep -Eq "(data|user)[[:space:]]+\.claude-usage" "$M"'
 
 echo "uninstall_test: $CHECKS checks, $FAIL failed"
 [ $FAIL = 0 ] || exit 1

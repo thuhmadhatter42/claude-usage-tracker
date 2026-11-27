@@ -12,6 +12,12 @@ if CommandLine.arguments.contains("--smoke-test") {
     exit(MainActor.assumeIsolated { Smoke.run(output: out) })
 }
 
+if launchArgs.loginItemOff {      // `jusage uninstall`: no window, one line, exit
+    let r = LoginItem(log: AppLog.shared).switchOff()
+    FileHandle(fileDescriptor: r.code == 0 ? 1 : 2).write(Data((r.line + "\n").utf8))
+    exit(r.code)
+}
+
 MainActor.assumeIsolated {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)

@@ -9,7 +9,8 @@ import ServiceManagement
 //   2. the login item is switched off.
 //   3. the `alias jusage=` lines in ~/.zshrc and ~/.bashrc go. The file is copied to the Trash first (never
 //      deleted outright), then rewritten without those lines.
-// `jusage uninstall` (the CLI) does step 1 itself before it calls the same script.
+// `jusage uninstall` (the CLI) does all three itself (step 2 through `Jusage --login-item-off`) before it calls
+// the same script (RULING 39).
 
 enum JusageUninstall {
     /// The two rc files install.sh writes the alias into.
