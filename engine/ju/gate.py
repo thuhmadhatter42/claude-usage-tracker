@@ -7,7 +7,8 @@ Rules (R-17…R-20 with J's cadence amendment), all in the pure functions below:
   due        after `read_every_s` (15–600) since the last success; at once when a reset has passed
              since the reading was taken; never before `blocked_until`. Manual skips the cadence
              and a guessed block, never an explicit Retry-After, and is floored at 15 s.
-  on_429     Retry-After > 0 → exactly that, capped at 3600 s (explicit); absent/0 → the ladder.
+  on_429     Retry-After > 0 → the longest of it (capped at 3600 s), the ladder step and read_every_s,
+             explicit, the step climbing; absent/0 → the ladder.
   on_failure every other failure → the ladder (guessed). A failure never brings the next try sooner.
   ladder     300, 600, 1200, 1800 s (cap), each +0–20 % jitter; success clears it.
 
@@ -129,11 +130,15 @@ def on_success(acc: AccountLive, *, data: dict, uuid: Optional[str], warning: Op
                    identity_uuid=uuid)
 
 
-def on_429(acc: AccountLive, retry_after: Optional[int], now: datetime, rand: Callable[[], float]) -> AccountLive:
+def on_429(acc: AccountLive, retry_after: Optional[int], now: datetime, rand: Callable[[], float],
+           read_every_s: int) -> AccountLive:
+    """A Retry-After only ever lengthens the wait (R-17 within R-18): the block is the longest of
+    the Retry-After (capped), the ladder step and `read_every_s`, and the step climbs either way, so
+    a service answering every call with a short Retry-After is still read less and less often."""
     err = ErrorInfo("rate_limited", RATE_LIMITED_TEXT, now)
     if retry_after:
-        until = now + timedelta(seconds=min(int(retry_after), RETRY_AFTER_CAP_S))
-        return _block(acc, err, until, explicit=True, step=acc.backoff_step)
+        wait = max(min(int(retry_after), RETRY_AFTER_CAP_S), _ladder_wait(acc, rand), read_every_s)
+        return _block(acc, err, now + timedelta(seconds=wait), explicit=True, step=acc.backoff_step + 1)
     return _ladder(acc, err, now, rand)
 
 
@@ -144,9 +149,12 @@ def on_failure(acc: AccountLive, kind: str, text: str, now: datetime, rand: Call
     return _ladder(acc, ErrorInfo(kind, text, now, other), now, rand)
 
 
+def _ladder_wait(acc: AccountLive, rand: Callable[[], float]) -> float:
+    return BACKOFF_S[min(acc.backoff_step, len(BACKOFF_S) - 1)] * (1 + JITTER * rand())
+
+
 def _ladder(acc: AccountLive, err: ErrorInfo, now: datetime, rand: Callable[[], float]) -> AccountLive:
-    base = BACKOFF_S[min(acc.backoff_step, len(BACKOFF_S) - 1)]
-    until = now + timedelta(seconds=base * (1 + JITTER * rand()))
+    until = now + timedelta(seconds=_ladder_wait(acc, rand))
     return _block(acc, err, until, explicit=False, step=acc.backoff_step + 1)
 
 
@@ -274,7 +282,7 @@ def _read_group(members: List[str], acc: AccountLive, others: Dict[str, int], no
                 raise ValueError(f"fingerprint verdict {verdict!r}")
     except RateLimited as e:
         deps.log("warn", "usage read rate-limited", folder=folder, retry_after=e.retry_after_s)
-        return reader, on_429(acc, e.retry_after_s, now, deps.rand), None
+        return reader, on_429(acc, e.retry_after_s, now, deps.rand, deps.read_every_s), None
     except JusageError as e:
         deps.log("warn", "usage read failed", folder=folder, kind=e.kind)
         text = IDENTITY_CHANGED_TEXT if e.kind == "identity_changed" else getattr(e, "text", None) or str(e)

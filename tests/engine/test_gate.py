@@ -81,19 +81,19 @@ class TestDue(unittest.TestCase):
         self.assertFalse(gate.due(fresh(), 600, T0 + timedelta(seconds=59), False, per_model, service_at=None).due)
 
     def test_reset_passed_never_beats_block(self):
-        acc = gate.on_429(fresh(), 120, T0, lambda: 0.0)
+        acc = gate.on_429(fresh(), 120, T0, lambda: 0.0, 60)
         meters = [Meter("session", "Session", 50.0, T0 + timedelta(seconds=5), 18000)]
         d = gate.due(acc, 60, T0 + timedelta(seconds=60), False, meters)
         self.assertFalse(d.due)
-        self.assertEqual(d.next_at, T0 + timedelta(seconds=120))
+        self.assertEqual(d.next_at, T0 + timedelta(seconds=300))     # the ladder outlasts a short Retry-After
 
 
 class TestBackoff(unittest.TestCase):
     def test_429_retry_after_120_0_absent_7200_capped(self):
-        cases = {120: (120, True), 0: (300, False), None: (300, False), 7200: (3600, True)}
+        cases = {900: (900, True), 120: (300, True), 0: (300, False), None: (300, False), 7200: (3600, True)}
         for ra, (wait, explicit) in cases.items():
             with self.subTest(retry_after=ra):
-                acc = gate.on_429(fresh(), ra, T0, lambda: 0.0)
+                acc = gate.on_429(fresh(), ra, T0, lambda: 0.0, 60)
                 self.assertEqual(acc.blocked_until, T0 + timedelta(seconds=wait))
                 self.assertEqual(acc.retry_after_explicit, explicit)
                 self.assertEqual(acc.error.kind, "rate_limited")
@@ -107,7 +107,7 @@ class TestBackoff(unittest.TestCase):
             acc = fresh()
             waits = []
             for _ in range(6):
-                acc = gate.on_429(acc, None, T0, lambda: r)
+                acc = gate.on_429(acc, None, T0, lambda: r, 60)
                 waits.append((acc.blocked_until - T0).total_seconds())
             expect = [s * factor for s in (300, 600, 1200, 1800, 1800, 1800)]
             for w, e in zip(waits, expect):
@@ -116,13 +116,13 @@ class TestBackoff(unittest.TestCase):
         rng = random.Random(7)
         acc = fresh()
         for base in (300, 600, 1200, 1800, 1800):
-            acc = gate.on_429(acc, None, T0, rng.random)
+            acc = gate.on_429(acc, None, T0, rng.random, 60)
             w = (acc.blocked_until - T0).total_seconds()
             self.assertGreaterEqual(w, base)
             self.assertLessEqual(w, base * 1.2)
 
     def test_success_clears_backoff(self):
-        acc = gate.on_429(gate.on_429(fresh(), None, T0, lambda: 0.0), None, T0, lambda: 0.0)
+        acc = gate.on_429(gate.on_429(fresh(), None, T0, lambda: 0.0, 60), None, T0, lambda: 0.0, 60)
         self.assertEqual(acc.backoff_step, 2)
         ok = gate.on_success(acc, data={"n": 2}, uuid="u", warning=None, anchor=acc.reset_anchor,
                              now=T0 + timedelta(hours=1))
@@ -132,11 +132,27 @@ class TestBackoff(unittest.TestCase):
         self.assertFalse(ok.retry_after_explicit)
         self.assertEqual(ok.source, "service")
         self.assertEqual(ok.fetched, T0 + timedelta(hours=1))
-        self.assertEqual(gate.on_429(ok, None, T0, lambda: 0.0).blocked_until, T0 + timedelta(seconds=300))
+        self.assertEqual(gate.on_429(ok, None, T0, lambda: 0.0, 60).blocked_until, T0 + timedelta(seconds=300))
 
     def test_explicit_retry_after_is_exact_no_jitter(self):
-        acc = gate.on_429(fresh(), 120, T0, lambda: 0.99)
-        self.assertEqual(acc.blocked_until, T0 + timedelta(seconds=120))
+        acc = gate.on_429(fresh(), 900, T0, lambda: 0.99, 60)
+        self.assertEqual(acc.blocked_until, T0 + timedelta(seconds=900))
+
+    def test_short_retry_after_never_shortens_the_cadence(self):
+        """Review-engine 2: Retry-After only ever lengthens a wait. The block is the longest of the
+        Retry-After, the ladder step and read_every_s, and every 429 climbs the ladder."""
+        acc = fresh(at=T0 - timedelta(hours=1))
+        waits = []
+        now = T0
+        for _ in range(5):
+            acc = gate.on_429(acc, 5, now, lambda: 0.0, 600)
+            waits.append((acc.blocked_until - now).total_seconds())
+            self.assertTrue(acc.retry_after_explicit)
+            now = acc.blocked_until
+        self.assertEqual(waits, [600, 600, 1200, 1800, 1800])
+        self.assertEqual(acc.backoff_step, 5)
+        # the 60 s default: still never sooner than the ladder
+        self.assertEqual(gate.on_429(fresh(), 5, T0, lambda: 0.0, 60).blocked_until, T0 + timedelta(seconds=300))
 
     def test_failure_never_sooner(self):
         for kind in ("no_network", "http", "reply_changed", "login_expired", "identity_changed"):
@@ -154,13 +170,13 @@ class TestBackoff(unittest.TestCase):
             gate.on_failure(fresh(), "rate_limited", "t", T0, lambda: 0.0)   # 429s go through on_429
 
     def test_explicit_block_never_shortened(self):
-        acc = gate.on_429(fresh(), 3600, T0, lambda: 0.0)
+        acc = gate.on_429(fresh(), 3600, T0, lambda: 0.0, 60)
         after = gate.on_failure(acc, "no_network", "No network", T0 + timedelta(seconds=10), lambda: 0.0)
         self.assertEqual(after.blocked_until, T0 + timedelta(seconds=3600))
         self.assertTrue(after.retry_after_explicit)
 
     def test_cadence_never_beats_backoff(self):
-        acc = gate.on_429(fresh(), None, T0, lambda: 0.0)
+        acc = gate.on_429(fresh(), None, T0, lambda: 0.0, 60)
         for s in (15, 16, 60, 299):
             self.assertFalse(gate.due(acc, 15, T0 + timedelta(seconds=s), False, []).due, s)
         self.assertTrue(gate.due(acc, 15, T0 + timedelta(seconds=300), False, []).due)
@@ -168,8 +184,8 @@ class TestBackoff(unittest.TestCase):
 
 class TestManual(unittest.TestCase):
     def test_manual_vs_explicit_retry_after(self):
-        guessed = gate.on_429(fresh(at=T0 - timedelta(minutes=5)), None, T0, lambda: 0.0)
-        explicit = gate.on_429(fresh(at=T0 - timedelta(minutes=5)), 900, T0, lambda: 0.0)
+        guessed = gate.on_429(fresh(at=T0 - timedelta(minutes=5)), None, T0, lambda: 0.0, 60)
+        explicit = gate.on_429(fresh(at=T0 - timedelta(minutes=5)), 900, T0, lambda: 0.0, 60)
         later = T0 + timedelta(seconds=20)
         self.assertTrue(gate.due(guessed, 60, later, True, []).due)
         d = gate.due(explicit, 60, later, True, [])
@@ -444,11 +460,11 @@ class TestRefresh(RefreshCase):
     def test_next_due_is_earliest(self):
         LiveStore(self.io.store_io()).save(self.state, gate_live({
             self.a: fresh(at=T0 - timedelta(seconds=20)),
-            self.b: gate.on_429(fresh(at=T0 - timedelta(seconds=50)), 25, T0 - timedelta(seconds=10), lambda: 0)}))
+            self.b: gate.on_429(fresh(at=T0 - timedelta(seconds=50)), 25, T0 - timedelta(seconds=295), lambda: 0, 60)}))
         s = Script(self.io, self.state, logins={}, uuids={self.a: ["u1"], self.b: ["u2"]}, replies={})
         res = gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
         self.assertEqual(s.fetched_tokens, [])
-        self.assertEqual(res.next_due, T0 + timedelta(seconds=15))   # b's Retry-After ends before a's cadence
+        self.assertEqual(res.next_due, T0 + timedelta(seconds=5))    # b's block ends before a's cadence
 
     def test_manual_records_last_manual(self):
         s = Script(self.io, self.state, logins={self.a: "ta"}, uuids={self.a: ["u"]},
