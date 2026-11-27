@@ -1,0 +1,274 @@
+"""E14: the fetch gate. The only door to the usage service (R-16). Every caller (app feed, `jusage
+live`, `update`, `share`, bare `jusage`) calls `refresh`, which holds an exclusive flock on
+`<state>/fetch.lock`; a second caller waits, then re-reads live.json under the lock and finds the
+first caller's readings fresh, so nothing is fetched twice.
+
+Rules (R-17…R-20 with J's cadence amendment), all in the pure functions below:
+  due        after `read_every_s` (15–600) since the last success; at once when a reset has passed
+             since the reading was taken; never before `blocked_until`. Manual skips the cadence
+             and a guessed block, never an explicit Retry-After, and is floored at 15 s.
+  on_429     Retry-After > 0 → exactly that, capped at 3600 s (explicit); absent/0 → the ladder.
+  on_failure every other failure → the ladder (guessed). A failure never brings the next try sooner.
+  ladder     300, 600, 1200, 1800 s (cap), each +0–20 % jitter; success clears it.
+
+Collaborators arrive in `GateDeps` (E10 login, E5 identity, E11 fetch/parse, E12 checks, E7 db,
+E4 cadence, E2 log); the real ones are wired by the CLI entry (E24).
+"""
+from __future__ import annotations
+
+import fcntl
+import os
+import time
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
+
+from .constants import (BACKOFF_S, JITTER, MANUAL_FLOOR_S, READ_EVERY_MAX, READ_EVERY_MIN, RETRY_AFTER_CAP_S)
+from .contracts import (ERROR_KINDS, GateDecision, JusageError, Login, Meter, RateLimited, Reading)
+from .live_store import AccountLive, ErrorInfo, Live, LiveStore, log_meters
+from .timeutil import minute_of_week
+
+LOCK_NAME = "fetch.lock"
+LOCK_TIMEOUT_S = 120
+LOCK_POLL_S = 0.05
+STUCK = "another jusage refresh is stuck"
+RATE_LIMITED_TEXT = "Anthropic is rate-limiting usage reads"
+IDENTITY_CHANGED_TEXT = "Account changed mid-read; reading discarded"
+
+
+@dataclass(frozen=True)
+class Parsed:
+    """What the gate needs from E11's ParsedReply: the meters and the flags."""
+    meters: List[Meter]
+    flags: List[str]
+
+
+@dataclass(frozen=True)
+class GateDeps:
+    store: LiveStore
+    find_login: Callable[[str], Login]                       # E10; raises LoginError
+    read_uuid: Callable[[str], Optional[str]]                # E5 read_identity(...).uuid
+    fetch: Callable[[str], dict]                             # E11; raises RateLimited/LoginError/HttpError/NetworkError
+    parse: Callable[[dict], Parsed]                          # E11; raises ReplyChanged
+    check_stable: Callable[[Optional[str], Optional[str]], None]          # E12; raises IdentityRejected
+    observe: Callable[[dict, datetime, Dict[str, int]], Tuple[dict, str]]  # E12 Fingerprint.observe
+    login_warning: Callable[[Login], Optional[str]]          # E10's words for a legacy login
+    open_db: Callable[[Path], object]                        # E7 open_db -> sqlite3.Connection
+    read_every_s: int                                        # E4 config read_every_s
+    now: Callable[[], datetime]                              # timeutil.now
+    rand: Callable[[], float]                                # random.random, in [0, 1)
+    log: Callable[..., None]                                 # E2 houselog.log
+
+
+@dataclass(frozen=True)
+class AccountBlock:
+    """One claude.ai account: folders sharing a uuid merged, the freshest reading kept (R-15)."""
+    key: str                      # the lead folder (first in the caller's order)
+    folders: List[str]
+    uuid: Optional[str]
+    state: AccountLive
+
+
+@dataclass(frozen=True)
+class RefreshResult:
+    live: Live
+    accounts: List[AccountBlock]
+    fetched: List[str]            # folders read from the service by this call
+    next_due: datetime
+
+
+# ------------------------------------------------------------------ pure rules
+
+def due(acc: AccountLive, read_every_s: int, now: datetime, manual: bool,
+        meters: Sequence[Meter]) -> GateDecision:
+    """May this folder be read now? `meters` = the parsed meters of `acc.data` (empty if none).
+    next_at = the earliest moment it becomes due (None when due now)."""
+    if not READ_EVERY_MIN <= read_every_s <= READ_EVERY_MAX:
+        raise ValueError(f"read_every_s {read_every_s} outside {READ_EVERY_MIN}-{READ_EVERY_MAX}")
+    blocked = acc.blocked_until is not None and now < acc.blocked_until
+    if blocked and (acc.retry_after_explicit or not manual):
+        return GateDecision(False, "rate_limited" if acc.retry_after_explicit else "backoff", acc.blocked_until)
+    if manual:
+        last = max((t for t in (acc.fetched, acc.last_manual) if t is not None), default=None)
+        if last is not None and (now - last).total_seconds() < MANUAL_FLOOR_S:
+            return GateDecision(False, "manual_floor", last + timedelta(seconds=MANUAL_FLOOR_S))
+        return GateDecision(True, "manual", None)
+    if acc.fetched is None:
+        return GateDecision(True, "never_read", None)
+    resets = sorted(m.resets_at for m in meters if m.resets_at is not None and m.resets_at > acc.fetched)
+    if resets and resets[0] <= now:
+        return GateDecision(True, "reset_passed", None)
+    cadence_at = acc.fetched + timedelta(seconds=read_every_s)
+    if now >= cadence_at:
+        return GateDecision(True, "cadence", None)
+    nxt = min([cadence_at] + resets[:1])
+    if acc.blocked_until is not None:
+        nxt = max(nxt, acc.blocked_until)
+    return GateDecision(False, "cadence", nxt)
+
+
+def on_success(acc: AccountLive, *, data: dict, uuid: Optional[str], warning: Optional[str], anchor: dict,
+               now: datetime) -> AccountLive:
+    return replace(acc, fetched=now, data=data, error=None, warning=warning, source="service",
+                   blocked_until=None, backoff_step=0, retry_after_explicit=False, reset_anchor=anchor,
+                   identity_uuid=uuid)
+
+
+def on_429(acc: AccountLive, retry_after: Optional[int], now: datetime, rand: Callable[[], float]) -> AccountLive:
+    err = ErrorInfo("rate_limited", RATE_LIMITED_TEXT, now)
+    if retry_after:
+        until = now + timedelta(seconds=min(int(retry_after), RETRY_AFTER_CAP_S))
+        return _block(acc, err, until, explicit=True, step=acc.backoff_step)
+    return _ladder(acc, err, now, rand)
+
+
+def on_failure(acc: AccountLive, kind: str, text: str, now: datetime, rand: Callable[[], float]) -> AccountLive:
+    if kind not in ERROR_KINDS or kind == "rate_limited":
+        raise ValueError(f"on_failure takes a non-429 error kind, got {kind!r}")
+    return _ladder(acc, ErrorInfo(kind, text, now), now, rand)
+
+
+def _ladder(acc: AccountLive, err: ErrorInfo, now: datetime, rand: Callable[[], float]) -> AccountLive:
+    base = BACKOFF_S[min(acc.backoff_step, len(BACKOFF_S) - 1)]
+    until = now + timedelta(seconds=base * (1 + JITTER * rand()))
+    return _block(acc, err, until, explicit=False, step=acc.backoff_step + 1)
+
+
+def _block(acc: AccountLive, err: ErrorInfo, until: datetime, *, explicit: bool, step: int) -> AccountLive:
+    """A new block never ends before a current one, and an explicit Retry-After still running stays
+    explicit (a failure never makes the next attempt sooner, R-18)."""
+    if acc.blocked_until is not None and acc.blocked_until > until:
+        until, explicit = acc.blocked_until, acc.retry_after_explicit or explicit
+    return replace(acc, error=err, blocked_until=until, retry_after_explicit=explicit, backoff_step=step)
+
+
+# ------------------------------------------------------------------ refresh
+
+def refresh(state: Path, accounts: Sequence[str], *, manual: bool, deps: GateDeps) -> RefreshResult:
+    """Read every due account through the lock and store the outcome. `accounts` = config folder
+    keys in display order (E5). One account's failure is stored as its error, never raised."""
+    fd = _lock(Path(state))
+    try:
+        return _refresh_locked(Path(state), list(accounts), manual, deps)
+    finally:
+        os.close(fd)              # closing the descriptor releases the flock
+
+
+def _lock(state: Path) -> int:
+    fd = os.open(state / LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o600)
+    deadline = time.monotonic() + LOCK_TIMEOUT_S
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                raise RuntimeError(STUCK) from None
+            time.sleep(LOCK_POLL_S)
+
+
+def _refresh_locked(state: Path, accounts: List[str], manual: bool, deps: GateDeps) -> RefreshResult:
+    live = deps.store.load(state, accounts)
+    groups = _group(accounts, {k: deps.read_uuid(k) for k in accounts})
+    fetched: List[str] = []
+    conn = None
+    try:
+        for lead, members, uuid in groups:
+            acc = live.account(lead)
+            now = deps.now()
+            if not due(acc, deps.read_every_s, now, manual, _meters(acc, deps)).due:
+                continue
+            others = {g[0]: live.account(g[0]).reset_anchor["minute_of_week"] for g in groups
+                      if g[0] != lead and live.account(g[0]).reset_anchor["minute_of_week"] is not None}
+            if manual:
+                acc = replace(acc, last_manual=now)
+            acc, reading = _read_one(lead, acc, others, now, deps)
+            live.put(lead, acc)
+            fetched.append(lead)
+            if reading is not None:
+                if conn is None:
+                    conn = deps.open_db(state)
+                log_meters(conn, lead, reading)
+        if fetched:
+            deps.store.save(state, live)
+    finally:
+        if conn is not None:
+            conn.close()
+    blocks = [AccountBlock(lead, members, uuid, _freshest([live.account(m) for m in members]))
+              for lead, members, uuid in groups]
+    return RefreshResult(live=live, accounts=blocks, fetched=fetched,
+                         next_due=_next_due(live, groups, deps))
+
+
+def _read_one(folder: str, acc: AccountLive, others: Dict[str, int], now: datetime,
+              deps: GateDeps) -> Tuple[AccountLive, Optional[Reading]]:
+    """find_login → uuid before → fetch → parse → uuid after → fingerprint. Returns the updated
+    entry and the accepted reading (None when anything refused it)."""
+    try:
+        login = deps.find_login(folder)
+        before = deps.read_uuid(folder)
+        reply = deps.fetch(login.token)
+        parsed = deps.parse(reply)
+        after = deps.read_uuid(folder)
+        deps.check_stable(before, after)
+        anchor = acc.reset_anchor
+        weekly = next((m.resets_at for m in parsed.meters if m.id == "weekly" and m.resets_at), None)
+        if weekly is not None:
+            anchor, verdict = deps.observe(acc.reset_anchor, weekly, others)
+            if verdict == "reject_foreign":
+                deps.log("warn", "reading rejected: weekly reset matches another account", folder=folder,
+                         minute_of_week=minute_of_week(weekly))
+                return on_failure(replace(acc, reset_anchor=anchor), "identity_foreign_reset",
+                                  "This reading matches another account's reset", now, deps.rand), None
+            if verdict != "accept":
+                raise ValueError(f"fingerprint verdict {verdict!r}")
+    except RateLimited as e:
+        deps.log("warn", "usage read rate-limited", folder=folder, retry_after=e.retry_after_s)
+        return on_429(acc, e.retry_after_s, now, deps.rand), None
+    except JusageError as e:
+        deps.log("warn", "usage read failed", folder=folder, kind=e.kind)
+        text = IDENTITY_CHANGED_TEXT if e.kind == "identity_changed" else getattr(e, "text", None) or str(e)
+        return on_failure(acc, e.kind, text, now, deps.rand), None
+    new = on_success(acc, data=reply, uuid=after, warning=deps.login_warning(login), anchor=anchor, now=now)
+    return new, Reading(folder=folder, fetched=now, meters=list(parsed.meters), flags=list(parsed.flags),
+                        uuid=after, source="service")
+
+
+def _group(accounts: List[str], uuids: Dict[str, Optional[str]]) -> List[Tuple[str, List[str], Optional[str]]]:
+    """Folders sharing a uuid → one group led by the first in order; no uuid → its own group."""
+    groups: List[Tuple[str, List[str], Optional[str]]] = []
+    by_uuid: Dict[str, List[str]] = {}
+    for k in accounts:
+        u = uuids[k]
+        if u is None:
+            groups.append((k, [k], None))
+        elif u in by_uuid:
+            by_uuid[u].append(k)
+        else:
+            by_uuid[u] = [k]
+            groups.append((k, by_uuid[u], u))
+    return groups
+
+
+def _freshest(entries: List[AccountLive]) -> AccountLive:
+    with_data = [e for e in entries if e.data is not None and e.fetched is not None]
+    return max(with_data, key=lambda e: e.fetched) if with_data else entries[0]
+
+
+def _meters(acc: AccountLive, deps: GateDeps) -> List[Meter]:
+    """The stored reply was accepted by parse when it was fetched; it parses the same way now."""
+    return list(deps.parse(acc.data).meters) if acc.data is not None else []
+
+
+def _next_due(live: Live, groups, deps: GateDeps) -> datetime:
+    now = deps.now()
+    if not groups:
+        return now + timedelta(seconds=deps.read_every_s)
+    times = []
+    for lead, _, _ in groups:
+        acc = live.account(lead)
+        d = due(acc, deps.read_every_s, now, False, _meters(acc, deps))
+        times.append(now if d.due else d.next_at)
+    return min(times)
