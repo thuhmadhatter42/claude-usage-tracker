@@ -59,6 +59,31 @@ def fake_dmg(version=h.VERSION, recorder=False, bundle_id=h.APP_ID) -> Path:
     return host
 
 
+def hdiutil_info() -> str:
+    return subprocess.run(["hdiutil", "info"], capture_output=True, text=True).stdout
+
+
+def still_attached(tmp, info=hdiutil_info, tries=20, pause=0.5) -> bool:
+    """True if a disk image under `tmp` is still attached after waiting for the disk-image daemon to
+    finish tearing it down (a detached volume's device node lingers for a moment)."""
+    import time
+    for i in range(tries):
+        if str(tmp) not in info():
+            return False
+        if i < tries - 1:
+            time.sleep(pause)
+    return True
+
+
+class StillAttachedTests(unittest.TestCase):
+    def test_a_lingering_device_that_goes_away_is_not_a_leak(self):
+        calls = iter(["x /tmp/t/a.dmg", "x /tmp/t/a.dmg", "clean"])
+        self.assertFalse(still_attached("/tmp/t", info=lambda: next(calls), pause=0))
+
+    def test_an_image_that_stays_attached_is_a_leak(self):
+        self.assertTrue(still_attached("/tmp/t", info=lambda: "x /tmp/t/a.dmg", tries=3, pause=0))
+
+
 class Installer(unittest.TestCase):
     def setUp(self):
         self.tmp = h.scratch()
@@ -81,8 +106,7 @@ class Installer(unittest.TestCase):
         self.addCleanup(self.no_disk_image_left_attached)
 
     def no_disk_image_left_attached(self):
-        info = subprocess.run(["hdiutil", "info"], capture_output=True, text=True).stdout
-        self.assertNotIn(str(self.tmp), info, "install.sh left its disk image attached")
+        self.assertFalse(still_attached(self.tmp), "install.sh left its disk image attached")
 
     def env(self, **extra):
         base = {"JUSAGE_APPS_DIR": str(self.apps), "JUSAGE_TRASH": str(self.stubs / "trash"),
