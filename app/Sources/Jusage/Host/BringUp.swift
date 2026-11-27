@@ -8,6 +8,7 @@ import Foundation
 ///   2. `Contents/Resources/VERSION` equals `CFBundleShortVersionString`
 ///   3. dev separation (SCORE §6): a `.dev` bundle id carries `JusageStateDir`, a release one never does
 ///   4. `themes.json` is valid (S4), then it becomes `ThemeBook.current`
+///   4b. the saved settings are readable (a damaged record refuses and is kept, never reset)
 ///   5. Python: the recorded path must exist and pass the 3.9 + sqlite3 check; none recorded → probe once and
 ///      record the first that passes; a recorded one that is gone refuses (no re-probe)
 
@@ -150,6 +151,11 @@ enum BringUp {
         case .success(let f): facts = f
         }
 
+        if let problem = settings.loadProblem {
+            return .failure(Refusal(line: "jusage: the saved settings could not be read (\(problem)). Nothing was changed. "
+                + "Quit jusage and run `defaults delete \(bundle.bundleIdentifier ?? "<bundle id>") \(SettingsStore.key)` to start fresh, or reopen the jusage that wrote them."))
+        }
+
         let path: String
         var recordedNow = false
         if let recorded = settings.settings.pythonPath {
@@ -176,6 +182,9 @@ enum BringUp {
 
     /// `--set-python <path>` (the installer passes it): records a good one; a bad one is refused and the old kept.
     static func setPython(_ path: String, settings: SettingsStore, python: PythonChecking = SystemPython()) -> Refusal? {
+        if let problem = settings.loadProblem {
+            return Refusal(line: "jusage: --set-python was not recorded: the saved settings could not be read (\(problem)).")
+        }
         guard path.hasPrefix("/") else { return Refusal(line: "jusage: --set-python needs an absolute path, not '\(path)'.") }
         guard python.exists(path), python.passes(path) else {
             let kept = settings.settings.pythonPath.map { "kept \($0)" } ?? "none recorded"
