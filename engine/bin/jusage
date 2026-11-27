@@ -1,0 +1,114 @@
+#!/bin/bash
+# jusage: the command-line face of the jusage engine. `jusage help` lists the commands.
+# Runs the engine with the Python the app recorded (config.json key "python"), so the app, this
+# command and the status-line wrapper all run one interpreter. Plain system commands only, by
+# absolute path: J's shell aliases ls/grep/cat to other tools.
+set -euo pipefail
+
+usage() {
+    /bin/cat <<'EOF'
+jusage: Claude Code usage on this Mac (and everyone sharing a reports folder).
+
+  jusage              scan, live meters, the last 7 days, the last 6 five-hour windows;
+                      then share + open the dashboard when a shared folder is set
+  jusage app          open the jusage menu bar app
+  jusage upgrade      update: the app checks for a signed release; a source copy runs git pull
+  jusage uninstall    restore status-line commands, then move jusage to the Trash
+  jusage help         this text, then every engine command and option
+  jusage <command>    any engine command, e.g. `jusage report --by model --since 30d`
+EOF
+}
+
+# Find the engine through any symlink to this script.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+    dir="$(cd -P "$(/usr/bin/dirname "$src")" && pwd)"
+    src="$(/usr/bin/readlink "$src")"
+    case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+done
+BIN="$(cd -P "$(/usr/bin/dirname "$src")" && pwd)"
+ENGINE="$(/usr/bin/dirname "$BIN")"
+CU="$ENGINE/claude_usage.py"
+CFG="$HOME/.claude-usage/config.json"
+BUNDLE_ID="com.goatdguild.jusage"
+
+recorded_python() {     # prints the recorded Python; nothing when none is recorded
+    [ -f "$CFG" ] || return 0
+    /usr/bin/plutil -extract python raw -o - "$CFG" 2>/dev/null || true
+}
+
+engine() {
+    local py
+    py="$(recorded_python)"
+    if [ -z "$py" ]; then
+        echo "Open jusage once so it records Python." >&2
+        exit 1
+    fi
+    if [ ! -x "$py" ]; then
+        echo "The recorded Python ($py) is gone. Open jusage once so it records Python again." >&2
+        exit 1
+    fi
+    "$py" -E -s "$CU" "$@"
+}
+
+in_app() {              # the engine ships inside jusage.app/Contents/Resources/engine
+    case "$ENGINE" in */Contents/Resources/engine) return 0 ;; *) return 1 ;; esac
+}
+
+case "${1:-}" in
+    "")
+        engine scan
+        engine live
+        engine report --since 7d
+        engine report --by blocks --last 6
+        reports="$(engine config get reports_dir)"
+        if [ -n "$reports" ]; then
+            engine share
+            engine dashboard --open
+        else
+            echo
+            echo "Not sharing yet: run  jusage share --reports <shared folder> --user <your name>  once; it is remembered."
+        fi
+        ;;
+    app)
+        /usr/bin/open -b "$BUNDLE_ID"
+        ;;
+    upgrade)
+        if in_app; then
+            /usr/bin/open -b "$BUNDLE_ID" --args --check-for-updates
+        else
+            repo="$(/usr/bin/dirname "$ENGINE")"
+            if [ -e "$repo/.git" ]; then
+                /usr/bin/git -C "$repo" pull --ff-only
+                echo "jusage $(< "$repo/VERSION")"
+            else
+                echo "This jusage is neither inside jusage.app nor a source checkout; reinstall it with install.sh." >&2
+                exit 1
+            fi
+        fi
+        ;;
+    uninstall)
+        shift
+        if in_app; then
+            script="${ENGINE%/engine}/uninstall.sh"
+        else
+            script="/Applications/jusage.app/Contents/Resources/uninstall.sh"
+        fi
+        if [ ! -f "$script" ]; then
+            echo "No uninstall script at $script; nothing was moved." >&2
+            exit 1
+        fi
+        engine statusline off --all
+        /bin/sh "$script" "$@"
+        ;;
+    help|-h|--help)
+        usage
+        if [ -n "$(recorded_python)" ]; then
+            echo
+            engine --help
+        fi
+        ;;
+    *)
+        engine "$@"
+        ;;
+esac
