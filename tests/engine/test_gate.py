@@ -447,7 +447,8 @@ class TestRefresh(RefreshCase):
                 procs.append(subprocess.Popen(
                     [sys.executable, "-c", CALLER, str(self.state), srv.url, str(marker), a, b],
                     cwd=str(REPO), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    env=dict(os.environ, PYTHONPATH=str(REPO / "engine") + os.pathsep + str(REPO))))
+                    env=dict({k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")},   # RULING 32
+                             PYTHONPATH=str(REPO / "engine") + os.pathsep + str(REPO))))
             outs = []
             for p in procs:
                 out, err = p.communicate(timeout=60)
