@@ -16,6 +16,7 @@ def main(argv):
         rest = rest[1:]
     original = " ".join(rest)
     data = sys.stdin.buffer.read()
+    job = start_original(original, data) if rest else None     # runs while the capture is written
     try:
         from ju import statusline
         statusline.capture(data, os.environ)
@@ -25,9 +26,9 @@ def main(argv):
             houselog.log("error", "statusline: capture failed", error=f"{type(e).__name__}: {e}")
         except BaseException:
             pass
-    if not rest:
+    if job is None:
         return 0
-    code, out, err = run_original(original, data)
+    code, out, err = finish_original(job)
     sys.stdout.buffer.write(out)
     sys.stdout.buffer.flush()
     sys.stderr.buffer.write(err)
@@ -35,8 +36,9 @@ def main(argv):
     return code
 
 
-def run_original(command, data):
-    """`/bin/sh -c command` with `data` on stdin; returns (exit code, stdout bytes, stderr bytes).
+def start_original(command, data):
+    """Start `/bin/sh -c command` with `data` for its stdin; `finish_original(job)` collects it.
+    Starting first lets the original run while the capture is written.
     Spawned directly, without the subprocess module: its import alone costs more than the
     whole 50 ms budget this wrapper has on top of the original."""
     in_r, in_w = os.pipe()
@@ -48,7 +50,12 @@ def run_original(command, data):
     for fd in (in_r, out_w, err_w):
         os.close(fd)
     os.set_blocking(in_w, False)
-    pending = memoryview(data)
+    return pid, in_w, out_r, err_r, memoryview(data)
+
+
+def finish_original(job):
+    """Feed the rest of stdin, drain stdout and stderr, wait; returns (exit code, out, err)."""
+    pid, in_w, out_r, err_r, pending = job
     collected = {out_r: [], err_r: []}
     reading = set(collected)
     if not pending:

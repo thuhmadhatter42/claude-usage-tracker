@@ -101,15 +101,22 @@ class WrapperTests(WrapperBase):
         self.assertEqual(r.returncode, 0)
 
     def test_overhead_under_50ms(self):
+        """Median over 41 back-to-back (bare, wrapped) pairs of wrapped minus bare. Each pair runs
+        under the same instant of machine load, so a load spike moves both halves, and the median
+        ignores the pairs a spike still splits. The budget stays 50 ms."""
         bare_cmd = ["/bin/sh", "-c", "true"]
         wrapped_cmd = [sys.executable, "-E", "-s", str(WRAPPER), "--", "true"]
-        bare, wrapped = [], []
-        for _ in range(20):                      # interleaved, so machine load hits both alike
-            for cmd, out in ((bare_cmd, bare), (wrapped_cmd, wrapped)):
-                t = time.perf_counter()
-                subprocess.run(cmd, input=self.payload(), capture_output=True, env=self.env)
-                out.append(time.perf_counter() - t)
-        added = statistics.median(wrapped) - statistics.median(bare)
+        payload = self.payload()
+
+        def timed(cmd):
+            t = time.perf_counter()
+            subprocess.run(cmd, input=payload, capture_output=True, env=self.env)
+            return time.perf_counter() - t
+        diffs = []
+        for _ in range(41):
+            b = timed(bare_cmd)
+            diffs.append(timed(wrapped_cmd) - b)
+        added = statistics.median(diffs)
         self.assertLess(added, 0.050, f"wrapper added {added * 1000:.1f} ms")
 
 if __name__ == "__main__":
