@@ -301,5 +301,15 @@ class SessionShare(unittest.TestCase):
         self.assertIsNone(s.build([s.block(s.k1, fresh(), "u-1")])["accounts"][0]["session_share"])
 
 
+class ForeignResetLabel(unittest.TestCase):
+    def test_error_names_the_other_account(self):
+        """RULING 31 / R-14: the feed fills in the other account's label."""
+        s = Scenario(self)
+        err = ErrorInfo("identity_foreign_reset", "This reading matches another account's reset", NOW, other=s.k2)
+        f = s.build([s.block(s.k1, AccountLive(error=err), "u-1"), s.block(s.k2, fresh(), "u-2")])
+        text = f["accounts"][0]["error"]["text"]
+        self.assertEqual(text, "This reading matches pat@example.com's reset")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,6 +40,15 @@ def _near(a: int, b: int) -> bool:
     return min(d, _WEEK_MIN - d) <= _TOL_MIN
 
 
+def foreign_match(weekly_reset: Optional[datetime], others: Mapping[str, int]) -> Optional[str]:
+    """The folder key (first in sorted order) whose learned minute this weekly reset matches, or
+    None. The gate records it on an identity_foreign_reset so the feed can name that account (R-14)."""
+    if weekly_reset is None:
+        return None
+    w = timeutil.minute_of_week(weekly_reset)
+    return next((k for k in sorted(others) if _near(w, others[k])), None)
+
+
 def observe(anchor: Mapping, weekly_reset: Optional[datetime], others: Mapping[str, int]) -> Tuple[dict, str]:
     """Judge one reading's weekly reset against this account's learned minute and the other
     accounts' (`others`: folder key -> learned minute). Returns (new anchor, verdict); the input

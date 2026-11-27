@@ -44,7 +44,7 @@ def _keychain(key: str, hints, env, now: datetime, probe: Callable) -> (List[str
     """(lines, chosen service or None, failure text or None). Same order as keychain.find_login."""
     lines = ["  Keychain items tried, in order (the first holding a login wins):"]
     services = list(keychain.candidate_services(key, hints, env))
-    if keychain._legacy_allowed(key, hints, env):
+    if keychain.legacy_allowed(key, hints, env):
         services.append(keychain.LEGACY_SERVICE)
     chosen = failure = None
     rows = []

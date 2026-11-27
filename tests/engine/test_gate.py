@@ -318,7 +318,7 @@ class TestRefresh(RefreshCase):
                 return dict(anchor, candidate=1), "reject_foreign"
             return anchor, "accept"
 
-        anchor_b = {"minute_of_week": 4860, "confirmations": 2, "candidate": None, "candidate_count": 0}
+        anchor_b = {"minute_of_week": 6300, "confirmations": 2, "candidate": None, "candidate_count": 0}  # 09:00 Fri
         LiveStore(self.io.store_io()).save(self.state, gate_live({self.b: fresh(at=T0, reset_anchor=anchor_b)}))
         s = Script(self.io, self.state, logins={self.a: "ta", self.b: "tb"}, uuids={self.a: ["u1"], self.b: ["u2"]},
                    replies={"ta": [reply(40, weekly_reset="2026-11-27T09:00:00+00:00")]}, observe=observe)
@@ -327,7 +327,8 @@ class TestRefresh(RefreshCase):
         self.assertEqual(acc.error.kind, "identity_foreign_reset")
         self.assertIsNone(acc.data)
         self.assertEqual(acc.reset_anchor["candidate"], 1)    # E12's anchor update is kept
-        self.assertEqual(seen["others"], {self.b: 4860})
+        self.assertEqual(seen["others"], {self.b: 6300})
+        self.assertEqual(acc.error.other, self.b)             # RULING 31: the matched account is named
         self.assertEqual(s.fetched_tokens, ["ta"])            # b was fresh: not fetched
 
     def test_two_folders_one_uuid_single_block(self):
@@ -478,6 +479,14 @@ CALLER = textwrap.dedent('''
     print(json.dumps({"fetched": res.fetched,
                       "pcts": {k: res.live.account(k).data["meters"][0]["pct"] for k in (a, b)}}))
 ''')
+
+
+class PublicNames(unittest.TestCase):
+    def test_fetch_lock_is_public(self):
+        """RULING 30: the CLI takes the fetch lock through a public name."""
+        from ju import gate
+        self.assertTrue(callable(gate.fetch_lock))
+        self.assertFalse(hasattr(gate, "_lock"))
 
 
 if __name__ == "__main__":

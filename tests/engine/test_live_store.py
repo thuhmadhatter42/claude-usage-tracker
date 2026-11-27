@@ -244,5 +244,20 @@ def _empty_json():
             "identity_uuid": None}
 
 
+class ForeignResetOther(LiveStoreCase):
+    def test_error_other_roundtrips_and_is_checked(self):
+        """RULING 31: an identity_foreign_reset error keeps the matched account's folder key."""
+        err = ErrorInfo("identity_foreign_reset", "This reading matches another account's reset", T0, other=self.b)
+        self.store.save(self.state, Live({self.a: AccountLive(error=err)}))
+        on_disk = json.loads(self.path().read_text())["accounts"][self.a]["error"]
+        self.assertEqual(on_disk["other"], self.b)
+        self.assertEqual(self.store.load(self.state, [self.a]).account(self.a).error, err)
+        plain = ErrorInfo("no_network", "No network", T0)
+        self.store.save(self.state, Live({self.a: AccountLive(error=plain)}))
+        self.assertNotIn("other", json.loads(self.path().read_text())["accounts"][self.a]["error"])
+        with self.assertRaises(ValueError):
+            ErrorInfo("no_network", "No network", T0, other=self.b)       # only a foreign reset names one
+
+
 if __name__ == "__main__":
     unittest.main()

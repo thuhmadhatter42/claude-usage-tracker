@@ -375,5 +375,12 @@ class NonMacTests(Base):
         self.assertEqual((f.read_bytes(), f.stat().st_mtime_ns), before)
 
 
+class PublicNames(unittest.TestCase):
+    def test_legacy_allowed_is_public(self):
+        """RULING 30: doctor asks keychain.legacy_allowed, a public name."""
+        self.assertTrue(callable(keychain.legacy_allowed))
+        self.assertFalse(hasattr(keychain, "_legacy_allowed"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from .constants import (BACKOFF_S, JITTER, MANUAL_FLOOR_S, READ_EVERY_MAX, READ_EVERY_MIN, RETRY_AFTER_CAP_S)
 from .contracts import (ERROR_KINDS, GateDecision, JusageError, Login, LoginError, Meter, RateLimited, Reading)
 from .live_store import AccountLive, ErrorInfo, Live, LiveStore, log_meters
+from . import identity
 from .timeutil import minute_of_week
 
 LOCK_NAME = "fetch.lock"
@@ -123,10 +124,11 @@ def on_429(acc: AccountLive, retry_after: Optional[int], now: datetime, rand: Ca
     return _ladder(acc, err, now, rand)
 
 
-def on_failure(acc: AccountLive, kind: str, text: str, now: datetime, rand: Callable[[], float]) -> AccountLive:
+def on_failure(acc: AccountLive, kind: str, text: str, now: datetime, rand: Callable[[], float],
+               other: Optional[str] = None) -> AccountLive:
     if kind not in ERROR_KINDS or kind == "rate_limited":
         raise ValueError(f"on_failure takes a non-429 error kind, got {kind!r}")
-    return _ladder(acc, ErrorInfo(kind, text, now), now, rand)
+    return _ladder(acc, ErrorInfo(kind, text, now, other), now, rand)
 
 
 def _ladder(acc: AccountLive, err: ErrorInfo, now: datetime, rand: Callable[[], float]) -> AccountLive:
@@ -148,14 +150,14 @@ def _block(acc: AccountLive, err: ErrorInfo, until: datetime, *, explicit: bool,
 def refresh(state: Path, accounts: Sequence[str], *, manual: bool, deps: GateDeps) -> RefreshResult:
     """Read every due account through the lock and store the outcome. `accounts` = config folder
     keys in display order (E5). One account's failure is stored as its error, never raised."""
-    fd = _lock(Path(state))
+    fd = fetch_lock(Path(state))
     try:
         return _refresh_locked(Path(state), list(accounts), manual, deps)
     finally:
         os.close(fd)              # closing the descriptor releases the flock
 
 
-def _lock(state: Path) -> int:
+def fetch_lock(state: Path) -> int:
     fd = os.open(state / LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o600)
     deadline = time.monotonic() + LOCK_TIMEOUT_S
     while True:
@@ -245,7 +247,8 @@ def _read_group(members: List[str], acc: AccountLive, others: Dict[str, int], no
                 deps.log("warn", "reading rejected: weekly reset matches another account", folder=folder,
                          minute_of_week=minute_of_week(weekly))
                 return reader, on_failure(replace(acc, reset_anchor=anchor), "identity_foreign_reset",
-                                          "This reading matches another account's reset", now, deps.rand), None
+                                          "This reading matches another account's reset", now, deps.rand,
+                                          other=identity.foreign_match(weekly, others)), None
             if verdict != "accept":
                 raise ValueError(f"fingerprint verdict {verdict!r}")
     except RateLimited as e:

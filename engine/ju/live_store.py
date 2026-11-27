@@ -38,10 +38,13 @@ class ErrorInfo:
     kind: str                     # one of contracts.ERROR_KINDS
     text: str
     at: datetime
+    other: Optional[str] = None   # identity_foreign_reset only: the folder key whose reset matched (R-14)
 
     def __post_init__(self):
         if self.kind not in ERROR_KINDS:
             raise ValueError(f"unknown error kind {self.kind!r}")
+        if self.other is not None and (self.kind != "identity_foreign_reset" or not isinstance(self.other, str)):
+            raise ValueError("only an identity_foreign_reset error names another account")
 
 
 @dataclass(frozen=True)
@@ -211,6 +214,8 @@ def _acc_to_json(a: AccountLive) -> dict:
     d = asdict(a)
     d["fetched"], d["blocked_until"], d["last_manual"] = _t(a.fetched), _t(a.blocked_until), _t(a.last_manual)
     d["error"] = None if a.error is None else {"kind": a.error.kind, "text": a.error.text, "at": iso(a.error.at)}
+    if a.error is not None and a.error.other is not None:
+        d["error"]["other"] = a.error.other
     return d
 
 
@@ -248,9 +253,12 @@ def _acc_from_json(v) -> AccountLive:
             raise _BadShape(f"reset_anchor.{k} {anchor[k]!r}")
     err = v["error"]
     if err is not None:
-        if not isinstance(err, dict) or set(err) != {"kind", "text", "at"} or not isinstance(err["text"], str):
+        if not isinstance(err, dict) or set(err) - {"other"} != {"kind", "text", "at"} or not isinstance(err["text"], str):
             raise _BadShape("error fields")
-        err = ErrorInfo(err["kind"], err["text"], parse_iso(err["at"]))
+        try:
+            err = ErrorInfo(err["kind"], err["text"], parse_iso(err["at"]), err.get("other"))
+        except ValueError as e:
+            raise _BadShape(f"error: {e}") from None
     return AccountLive(fetched=_time(v["fetched"]), data=v["data"], error=err, warning=v["warning"],
                        source=v["source"], blocked_until=_time(v["blocked_until"]),
                        backoff_step=v["backoff_step"], retry_after_explicit=v["retry_after_explicit"],

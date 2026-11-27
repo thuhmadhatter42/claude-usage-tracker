@@ -87,10 +87,25 @@ def pace_block(p) -> dict:
             "reset_due": p.reset_due, "words": p.words}
 
 
-def _error_block(acc: AccountLive) -> Optional[dict]:
+FOREIGN_RESET_TEXT = "This reading matches {other}'s reset"
+
+
+def _error_block(acc: AccountLive, label: Callable[[str], str]) -> Optional[dict]:
+    """The account's error; a foreign reset names the other account by its label (R-14)."""
     if acc.error is None:
         return None
-    return {"kind": acc.error.kind, "text": acc.error.text, "until": _iso(acc.blocked_until)}
+    text = acc.error.text
+    if acc.error.kind == "identity_foreign_reset" and acc.error.other is not None:
+        text = FOREIGN_RESET_TEXT.format(other=label(acc.error.other))
+    return {"kind": acc.error.kind, "text": text, "until": _iso(acc.blocked_until)}
+
+
+def _label(cfg, all_keys: Sequence[str]) -> Callable[[str], str]:
+    """An account's on-screen label: its email when its identity is known, else its folder name."""
+    def label(key: str) -> str:
+        ident = accounts.read_identity(key, cfg)
+        return ident.email if ident is not None and ident.email else accounts.short_name(key, all_keys)
+    return label
 
 
 def _others(refresh: RefreshResult, block: AccountBlock) -> Dict[str, int]:
@@ -234,6 +249,7 @@ def account_blocks(*, cfg, refresh: RefreshResult, conn, now: datetime,
     """The `accounts` list: one block per claude.ai account (folders sharing a uuid are one),
     keyed by its lowest-numbered folder, sorted by number. `views` = views(...) of this refresh."""
     out = []
+    label = _label(cfg, [k for b in refresh.accounts for k in b.folders])
     for block, view in zip(refresh.accounts, views):
         members = accounts.ordered(block.folders, cfg)
         key = members[0]
@@ -247,7 +263,7 @@ def account_blocks(*, cfg, refresh: RefreshResult, conn, now: datetime,
             "key": key, "number": accounts.number_for(cfg, key),
             "email": ident.email if ident else None, "uuid": uuid, "folders": list(members),
             "weekly_reset": weekly["resets_at"] if weekly else None, "flags": flags,
-            "warning": acc.warning, "error": _error_block(acc), "no_session_meter": no_session,
+            "warning": acc.warning, "error": _error_block(acc, label), "no_session_meter": no_session,
             "meters": meters,
             "session_share": _session_share(conn, members, meters, no_session, now),
             "missing_people": missing})

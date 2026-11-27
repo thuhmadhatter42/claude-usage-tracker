@@ -186,7 +186,7 @@ class Run:
         sl = _module("ju.statusline")
         store = live_store()
         accepted = []
-        fd = gate._lock(self.state)
+        fd = gate.fetch_lock(self.state)
         try:
             live = store.load(self.state, self.keys)
             uuids = {k: (accounts.read_identity(k, self.cfg) or (None, None))[1] for k in self.keys}
