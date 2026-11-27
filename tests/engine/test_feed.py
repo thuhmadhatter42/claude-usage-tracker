@@ -242,6 +242,20 @@ class Sources(unittest.TestCase):
         self.assertEqual(a["missing_people"], ["Lee"])
 
 
+class WithCapture(unittest.TestCase):
+    def test_capture_without_five_hour_keeps_the_session_meter(self):
+        """Review-engine 5: a capture carrying only seven_day replaces weekly and keeps every other
+        stored meter, the session one included."""
+        acc = AccountLive(fetched=NOW - timedelta(minutes=5), data=REPLY, identity_uuid="u-1")
+        cap = Reading(folder="/x", fetched=NOW, flags=[], uuid="u-1", source="statusline", meters=[
+            Meter("weekly", "Weekly", 60.0, timeutil.parse_iso("2026-12-01T01:00:00+00:00"), 604800)])
+        new = feed.with_capture(acc, cap)
+        from ju import usage_client
+        got = {m.id: m.pct for m in usage_client.parse(new.data).meters}
+        self.assertEqual(got, {"session": 37.0, "weekly": 60.0, "weekly:fable": 18.0})
+        self.assertFalse(usage_client.parse(new.data).no_session_meter)
+
+
 class NothingDropped(unittest.TestCase):
     def test_hidden_nothing_dropped(self):
         s = Scenario(self)

@@ -136,11 +136,14 @@ _KINDS = {"session": "session", "weekly": "weekly_all"}
 def with_capture(acc: AccountLive, reading: Reading) -> AccountLive:
     """RULING 28: an accepted status-line reading as the account's stored reading. `data` keeps
     the usage-service reply shape (so E11 parses it and E14's due() sees it): session and weekly
-    from the capture, the per-model weeklies and the credits flag carried from the last service
+    from the capture (a window it lacks keeps the stored meter), the per-model weeklies and the credits flag carried from the last service
     reply (their age stays in meter_log, which the feed reads)."""
     old = usage_client.parse(acc.data).meters if acc.data is not None else []
-    limits = [{"kind": _KINDS[m.id], "percent": m.pct, "resets_at": _iso(m.resets_at)}
-              for mid in STATUSLINE_METERS for m in reading.meters if m.id == mid]
+    taken = {m.id: m for m in reading.meters if m.id in STATUSLINE_METERS}
+    kept = {m.id: m for m in old}
+    # a capture replaces only the windows it carries; one missing from it keeps the stored meter
+    limits = [{"kind": _KINDS[mid], "percent": m.pct, "resets_at": _iso(m.resets_at)}
+              for mid in STATUSLINE_METERS for m in [taken.get(mid) or kept.get(mid)] if m is not None]
     for m in old:
         if m.id not in STATUSLINE_METERS:
             limits.append({"kind": "weekly_scoped", "percent": m.pct, "resets_at": _iso(m.resets_at),
