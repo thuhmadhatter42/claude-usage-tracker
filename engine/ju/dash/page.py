@@ -10,11 +10,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from ju import fsutil
+from ju import fsutil, share, timeutil
 from ju.constants import HERE
 from ju.dash import sections, theme_css
 from ju.themes import load_themes
-from ju.timeutil import parse_iso
 
 STATIC = Path(__file__).resolve().parent / "static"
 THEMES_PATH = HERE.parent / "themes.json"
@@ -66,11 +65,12 @@ def _read(names) -> str:
     return "\n".join((STATIC / "house" / n).read_text(encoding="utf-8") for n in names)
 
 
-def render(reports: List[dict], notes: List[str], version: str, now: datetime, rules: dict) -> str:
+def render(reports: List[share.Report], notes: List[str], version: str, now: datetime, rules: dict) -> str:
     rules["stale_after_s"]                              # required by the page script; KeyError names it
     themes = load_themes(THEMES_PATH)
     model = sections.DashModel.build(reports, now, rules, notes)
-    data_time = max((r["generated"] for r in reports), key=parse_iso, default=None)
+    newest = max((r.generated for r in reports), default=None)
+    data_time = timeutil.iso(newest) if newest else None
     title = f"Claude usage · jusage {sections.esc(version)} · "
     title += f"data as of {sections.clock_html(data_time, now)}" if data_time else "no reports yet"
     body = "\n".join([sections.plan_meters(model), sections.today_panels(model), sections.everyone(model),

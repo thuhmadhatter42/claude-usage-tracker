@@ -293,6 +293,13 @@ class LoadTests(FolderCase):
         self.assertEqual([r.install_id for r in reports], ["c3d4"])
         self.assertEqual(notes, [])
 
+    def test_no_own_install_keeps_every_report(self):
+        """The dashboard shows everyone, this Mac included (RULING 35): own_install=None drops nothing."""
+        self.put("Sam@renamed-a1b2.json", peer(user="Sam", install="a1b2"))
+        self.put("Lee@lee-mac-c3d4.json", peer())
+        reports, _ = self.load(own=None)
+        self.assertEqual(sorted(r.install_id for r in reports), ["a1b2", "c3d4"])
+
     def test_instants_not_text(self):
         # the same install under two names: text order says X is later, the instant says Y is
         x = peer(install="c3d4", host="old", generated=parse_iso("2026-11-26T10:00:00+02:00"))

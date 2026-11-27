@@ -399,9 +399,10 @@ def _label_accounts(raw: dict) -> Tuple[List[dict], Dict[str, List[dict]]]:
     return accounts, blocks
 
 
-def load_reports(directory, own_install: str) -> Tuple[List[Report], List[str]]:
+def load_reports(directory, own_install: Optional[str]) -> Tuple[List[Report], List[str]]:
     """Every usable report in the shared folder except this install's own (its data comes from the
-    ledger), and a note for each file skipped. Half-synced `.tmp` files, `.sync-conflict` copies,
+    ledger; own_install=None keeps it, for the dashboard, which shows everyone), and a note for each
+    file skipped. Half-synced `.tmp` files, `.sync-conflict` copies,
     unreadable files, other versions and bad shapes are skipped with the file named (R-115, R-129).
     Two files for one install (a rename, a reinstall) keep the newer `generated` instant, compared
     as instants (R-116); the older is ignored, never deleted: it is theirs."""

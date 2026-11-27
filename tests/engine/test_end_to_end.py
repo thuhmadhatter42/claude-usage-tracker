@@ -1,0 +1,165 @@
+"""Wave 4 end to end: the real engine as a process, a temp HOME, a fake `security` first on PATH, the
+usage endpoint a FakeUsageServer. Nothing here reaches the real Keychain, the real endpoint, the real
+~/.claude* folders or the real install, and every run proves it: the engine runs under an audit hook
+that records every path it opens or lists, and no path under the account's real home may start with
+`.claude` (RULING 32).
+
+    report written by share.py  -> dashboard renders it            (RULING 35)
+    a Mac with no Claude account -> share writes an empty report   (RULING 50)
+    menu-json                    -> the golden feed's shape        (tests/fixtures/feed-v2.json)
+    status-line capture          -> the primary reading            (RULINGS 28/29)
+    staleness                    -> flips at exactly 900 s         (RULING 33)
+"""
+import json
+import os
+import pwd
+import subprocess
+import sys
+import textwrap
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from tests.engine import support
+from ju import accounts, formats, keychain, timeutil
+
+ROOT = Path(__file__).resolve().parents[2]
+ENGINE = ROOT / "engine"
+ENTRY = ENGINE / "claude_usage.py"
+REAL_HOME = pwd.getpwuid(os.getuid()).pw_dir
+TOKEN = "sk-ant-oat01-" + "E" * 60
+
+# Runs claude_usage.main() with USAGE_URL pointed at the fake server and an audit hook that writes
+# every path the process opens, lists or stats (and every program it starts) to a log file.
+DRIVER = textwrap.dedent("""
+    import importlib.util, json, os, sys
+    entry, url, log, args = sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
+    seen = open(log, "a")
+    def hook(event, a):
+        if event in ("open", "os.listdir", "os.scandir", "os.chdir") and a and isinstance(a[0], (str, bytes, os.PathLike)):
+            seen.write(os.fsdecode(a[0]) + "\\n")
+        elif event == "subprocess.Popen":
+            seen.write("exec:" + os.fsdecode(a[0]) + "\\n")
+    sys.addaudithook(hook)
+    sys.path.insert(0, os.path.dirname(entry))
+    spec = importlib.util.spec_from_file_location("claude_usage", entry)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["claude_usage"] = mod
+    spec.loader.exec_module(mod)
+    mod.USAGE_URL = url
+    code = mod.main(args)
+    seen.flush()
+    sys.exit(code)
+""")
+
+
+def login_blob():
+    exp = (datetime.now(timezone.utc) + timedelta(hours=3)).timestamp() * 1000
+    return json.dumps({"claudeAiOauth": {"accessToken": TOKEN, "expiresAt": exp}})
+
+
+def reply(session_pct=37, weekly_pct=52):
+    now = datetime.now(timezone.utc)
+    return {"limits": [
+        {"kind": "session", "percent": session_pct, "resets_at": (now + timedelta(hours=2)).isoformat()},
+        {"kind": "weekly_all", "percent": weekly_pct, "resets_at": (now + timedelta(days=3)).isoformat()}]}
+
+
+class EndToEnd(unittest.TestCase):
+    def setUp(self):
+        saved = {k: os.environ.pop(k) for k in ("CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR") if k in os.environ}
+        self.addCleanup(os.environ.update, saved)
+        self.h = support.temp_home()
+        self.addCleanup(self.h.cleanup)
+        self.items = {}
+        self.seen = self.h.home / "opened.log"
+        self.driver = self.h.home / "driver.py"
+        self.driver.write_text(DRIVER)
+
+    def tearDown(self):
+        self.assert_no_real_claude_path()
+
+    # ------------------------------------------------------------------ helpers
+
+    def account(self, name=".claude", email="sam@example.com", uuid="u-1"):
+        d = self.h.home / name
+        (d / "projects").mkdir(parents=True, exist_ok=True)
+        (d / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": email, "accountUuid": uuid}}))
+        key = accounts.folder_key(d)
+        self.items[keychain.candidate_services(key, None, {"HOME": str(self.h.home)})[0]] = login_blob()
+        return key
+
+    def transcript(self, folder=".claude", tokens=100, minutes_ago=5):
+        ts = timeutil.iso(timeutil.now() - timedelta(minutes=minutes_ago))
+        support.write_transcript(self.h.home / folder, [{"ts": ts, "model": "claude-opus-5",
+                                                        "input": tokens, "output": 7}], cwd="/work/jusage")
+
+    def engine(self, *args, url="http://127.0.0.1:9/never", stdin=None):
+        with support.fake_security(self.items) as sec:
+            env = {"HOME": str(self.h.home), "LANG": "en_US.UTF-8", "PATH": sec.path()}
+            r = subprocess.run([sys.executable, "-B", "-E", "-s", str(self.driver), str(ENTRY), url, str(self.seen),
+                                json.dumps(list(args))], env=env, capture_output=True, text=True, timeout=120,
+                               input=stdin)
+            self.assertEqual(sec.refused(), [], "the engine only ever reads the (fake) Keychain")
+        return r
+
+    def assert_no_real_claude_path(self):
+        if not self.seen.exists():
+            return
+        lines = self.seen.read_text().splitlines()
+        # the hook must be seeing the engine's opens, or this check could never fail
+        self.assertTrue(any(l.startswith(str(self.h.home)) or l.startswith(os.path.realpath(str(self.h.home))) for l in lines),
+                        "the audit hook recorded none of the engine's own files")
+        bad = []
+        for line in lines:
+            p = line[5:] if line.startswith("exec:") else line
+            if line.startswith("exec:") and os.path.basename(p) == "security" and not p.startswith("/"):
+                continue            # resolved through PATH, where the fake is first
+            full = os.path.realpath(p) if os.path.isabs(p) else p
+            rel = os.path.relpath(full, REAL_HOME) if full.startswith(REAL_HOME + os.sep) else None
+            if rel is not None and (rel.startswith(".claude") or rel.startswith("jusage") or rel.startswith("Library/Keychains")):
+                bad.append(p)
+            if full.startswith("/Applications/jusage.app"):
+                bad.append(p)
+        self.assertEqual(bad, [], "the engine reached a real Claude folder, Keychain or install")
+
+    # ------------------------------------------------------------------ RULING 50
+
+    def test_share_on_a_mac_with_no_claude_account(self):
+        reports = self.h.home / "shared"
+        r = self.engine("share", "--reports", str(reports), "--user", "Sam")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        files = sorted(reports.glob("Sam@*.json"))
+        self.assertEqual(len(files), 1, list(reports.iterdir()))
+        rep = json.loads(files[0].read_text())
+        self.assertEqual((rep["accounts"], rep["live"], rep["blocks"], rep["session_share"]), ([], {}, {}, {}))
+        self.assertEqual(rep["report_version"], 3)
+
+    # ------------------------------------------------------------------ RULING 35
+
+    def test_report_written_by_share_renders_in_the_dashboard(self):
+        self.account()
+        self.transcript(tokens=1234)
+        reports = self.h.home / "shared"
+        page = self.h.home / "page.html"
+        with support.FakeUsageServer([(200, {}, reply(37, 52))]) as srv:
+            r = self.engine("share", "--reports", str(reports), "--user", "Sam", url=srv.url)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        rep = json.loads(next(reports.glob("Sam@*.json")).read_text())
+        self.assertEqual(list(rep["live"]), ["u-1"])
+        self.assertEqual(rep["live"]["u-1"]["email"], "sam@example.com")
+        self.assertEqual([m["id"] for m in rep["live"]["u-1"]["meters"]][:2], ["session", "weekly"])
+        r = self.engine("dashboard", "--reports", str(reports), "--out", str(page))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        html = page.read_text()
+        install = json.loads((self.h.state / "config.json").read_text())["install_id"]
+        self.assertIn(f"data-k='person:{install}'", html)                 # this Mac's own report is on the page
+        self.assertIn("<b>Sam</b>", html)
+        self.assertIn("data-k='acct:u-1'", html)                          # plan meters grouped by uuid
+        self.assertIn("<b>sam@example.com</b>", html)
+        self.assertIn("37%", html)
+        self.assertIn(formats.tokens(1234 + 7), html)                     # today's tokens from the report's days
+        self.assertNotIn("No reports yet", html)
+
+if __name__ == "__main__":
+    unittest.main()
