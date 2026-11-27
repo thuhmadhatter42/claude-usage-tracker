@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>jusage</string>
+  <key>CFBundleDisplayName</key><string>jusage</string>
+  <key>CFBundleIdentifier</key><string>com.goatdguild.jusage</string>
+  <key>CFBundleExecutable</key><string>Jusage</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <!-- stamped by `scripts/version.sh plist` from VERSION; never edited by hand -->
+  <key>CFBundleShortVersionString</key><string>0.0.0</string>
+  <key>CFBundleVersion</key><string>0</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <!-- Sparkle: the feed is the appcast.xml attached to the latest GitHub release -->
+  <key>SUFeedURL</key><string>https://github.com/thuhmadhatter42/claude-usage-tracker/releases/latest/download/appcast.xml</string>
+  <!-- the public half of the EdDSA key (`generate_keys --account jusage`); the release build writes it here.
+       Until then the value is a placeholder and Help > Run Doctor says FAIL on Updates. -->
+  <key>SUPublicEDKey</key><string>__SU_PUBLIC_ED_KEY__</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUScheduledCheckInterval</key><integer>86400</integer>
+</dict>
+</plist>
