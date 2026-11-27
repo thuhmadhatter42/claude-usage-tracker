@@ -188,6 +188,7 @@ def _refresh_locked(state: Path, accounts: List[str], manual: bool, deps: GateDe
     live = deps.store.load(state, accounts)
     groups = _group(accounts, {k: deps.read_uuid(k) for k in accounts})
     fetched: List[str] = []
+    changed = False
     conn = None
     try:
         for _, members, _ in groups:
@@ -209,13 +210,14 @@ def _refresh_locked(state: Path, accounts: List[str], manual: bool, deps: GateDe
             reader, acc, reading = _read_group(members, acc, others, now, deps)
             key = reader if reader is not None else cur
             live.put(key, acc)
+            changed = True                      # a failure with no reader is saved too: its ladder grows
             if reader is not None:
                 fetched.append(reader)
             if reading is not None:
                 if conn is None:
                     conn = deps.open_db(state)
                 log_meters(conn, reader, reading)
-        if fetched:
+        if changed:
             deps.store.save(state, live)
     finally:
         if conn is not None:

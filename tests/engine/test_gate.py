@@ -391,6 +391,25 @@ class TestRefresh(RefreshCase):
         self.assertEqual(blk.state.error, ErrorInfo("login_missing", "No login", T0))
         self.assertIsNotNone(blk.state.blocked_until)
 
+    def test_login_failure_is_saved_so_its_backoff_grows(self):
+        """Review-engine 7: a run that reads nothing (no login anywhere) still saves the account's
+        block, so the next run waits it out and a repeat climbs the ladder (5, then 10 min)."""
+        missing = LoginError("login_expired", "Open Claude Code on this account, then refresh")
+        s = Script(self.io, self.state, logins={self.a: missing}, uuids={self.a: ["u1"]}, replies={})
+        gate.refresh(self.state, [self.a], manual=False, deps=s.deps())
+        on_disk = LiveStore(self.io.store_io()).load(self.state, [self.a]).account(self.a)
+        self.assertEqual(on_disk.error.kind, "login_expired")
+        self.assertEqual(on_disk.blocked_until, T0 + timedelta(seconds=300))
+        self.assertEqual(on_disk.backoff_step, 1)
+        s.clock[0] = T0 + timedelta(seconds=60)               # blocked: nothing tried, nothing changes
+        res = gate.refresh(self.state, [self.a], manual=False, deps=s.deps())
+        self.assertEqual(res.live.account(self.a).backoff_step, 1)
+        s.clock[0] = T0 + timedelta(seconds=300)
+        gate.refresh(self.state, [self.a], manual=False, deps=s.deps())
+        on_disk = LiveStore(self.io.store_io()).load(self.state, [self.a]).account(self.a)
+        self.assertEqual(on_disk.backoff_step, 2)
+        self.assertEqual(on_disk.blocked_until, T0 + timedelta(seconds=900))
+
     def test_merge_freshest_wins_when_lead_older(self):
         LiveStore(self.io.store_io()).save(self.state, gate_live({
             self.a: fresh(at=T0 - timedelta(seconds=10)),
