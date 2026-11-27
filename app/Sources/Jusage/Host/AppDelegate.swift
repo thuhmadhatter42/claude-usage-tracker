@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panelWindow: Panel!
     private var panel: PanelController!
     private var observers: Observers!
+    private var resizeWatcher: ContentResizeWatcher?
     private var scheduler: Scheduler?
     private var loginItem: LoginItem!
     private var subscriptions: Set<AnyCancellable> = []
@@ -45,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updater = AppUpdater()
         statusItem = StatusItemController(
             maker: SystemStatusSlots(),
-            menuItems: { [unowned self] in JusageHouseMenu.items(updater: self.updater, quit: { NSApp.terminate(nil) }) },
+            menuItems: { [unowned self] in JusageHouseMenu.items(updater: self.updater, quit: { NSApp.terminate(nil) }, presentSheet: self.presentSheet) },
             leftClick: { [unowned self] in self.panel.toggle() },
             log: log)
 
@@ -69,6 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               })
         observers.start()
 
+        resizeWatcher = ContentResizeWatcher(
+            changes: model.objectWillChange.merge(with: settings.objectWillChange).eraseToAnyPublisher(),
+            replace: { [unowned self] in self.panel.replaceIfShown() })
+
         model.objectWillChange.merge(with: settings.objectWillChange)
             .receive(on: RunLoop.main)
             .sink { [unowned self] _ in self.redraw() }
@@ -84,6 +89,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         updater.checkInBackgroundAtLaunch()
         if args.checkForUpdates { updater.checkForUpdates() }
+    }
+
+    /// The kit's sheets hang off the panel window. A right-click menu item shows the panel (and activates the app)
+    /// first, so the sheet always has a visible window to open on; from the panel's own menu it is already up.
+    private func presentSheet(_ open: @escaping @MainActor () -> Void) {
+        if !panel.isShown { panel.show() }
+        open()
     }
 
     // MARK: bring-up
@@ -104,8 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refuse(_ r: Refusal) {
         refusal = r
-        log.error("bringup", r.line)
-        model.apply(.failed(line: r.line, exit: 2), now: Date())
+        HostFailure.refuse(r, log: log, model: model)
     }
 
     /// The `jusage` command runs the same Python as the app (SCORE §1.5): the engine's `config python`.
@@ -126,11 +137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let now = Date()
             model.apply(r, now: now)
             var nextDue: Date? = nil
-            if case .ok = r, model.runError == nil, let feed = model.feed {
+            if HostFailure.ranOK(r, model: model, log: log), let feed = model.feed {
                 nextDue = feed.nextDue
                 afterGoodFeed(feed, now: now)
-            } else {
-                log.error("engine", "run failed: \(model.runError ?? Self.describe(r))")
             }
             done(nextDue)
         }
@@ -143,8 +152,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let (notes, latch) = NotifyLatch.evaluate(feed: feed, settings: settings.settings,
                                                   latch: settings.settings.notificationLatch, now: now)
-        if latch != settings.settings.notificationLatch { settings.update { $0.notificationLatch = latch } }
-        notifier?.post(notes)
+        let old = settings.settings.notificationLatch
+        guard let notifier else { return }   // no engine, no notifier: nothing was delivered, nothing is recorded
+        // A crossing is recorded as sent only once the system accepted its notification.
+        notifier.post(notes) { [weak self] delivered in
+            Task { @MainActor in
+                guard let self else { return }
+                let kept = NotifyLatch.committed(old: old, new: latch, notes: notes, delivered: delivered)
+                if kept != self.settings.settings.notificationLatch { self.settings.update { $0.notificationLatch = kept } }
+            }
+        }
     }
 
     private func runSync(_ args: [String], timeout: TimeInterval) -> RunResult {
@@ -166,6 +183,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Uninstall's first step: the engine restores every status-line original (`statusline off --all`).
     private func statusLineOff() -> (Int32, String) {
+        // Bring-up failed (no engine): uninstalling must still work. The engine's own record says whether a
+        // status line was ever wrapped; if none was, there is nothing to restore.
+        if engine == nil {
+            let facts = try? BringUp.bundleFacts(.main).get()
+            return JusageUninstall.statusLineOffWithoutEngine(stateDir: facts?.stateDir, home: NSHomeDirectory())
+        }
         switch runSync(["statusline", "off", "--all"], timeout: 30) {
         case .ok(let data): return (0, String(decoding: data, as: UTF8.self))
         case .failed(let line, let code): return (code, line)
@@ -190,7 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openDashboard: { [unowned self] path in
                 if !NSWorkspace.shared.open(URL(fileURLWithPath: path)) { self.log.error("dashboard", "could not open \(path)") }
             },
-            houseMenu: StatusItemController.panelMenu(from: JusageHouseMenu.items(updater: updater, quit: { NSApp.terminate(nil) })),
+            houseMenu: StatusItemController.panelMenu(from: JusageHouseMenu.items(updater: updater, quit: { NSApp.terminate(nil) }, presentSheet: { [unowned self] in self.presentSheet($0) })),
             engine: { [unowned self] args in await self.engineCommand(args) },
             loginItem: LoginItemControl(isOn: { [unowned self] in self.loginItem.isOn },
                                         set: { [unowned self] on in self.loginItem.set(on) }),
@@ -207,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func engineCommand(_ args: [String]) async -> RunResult {
         guard let e = engine else { return .failed(line: refusal?.line ?? "jusage: the engine is not ready", exit: 2) }
         let r = await FeedRunner.run(python: e.python, script: e.script, args: args, stateDir: e.stateDir)
-        if case .ok = r { scheduler?.request(.manual) }
+        if case .ok = r { scheduler?.request(.settingsChanged) }
         else { log.error("engine", "\(args.joined(separator: " ")) failed: \(Self.describe(r))") }
         return r
     }
@@ -222,14 +245,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// For the log: the one failure text (AppModel, RULINGS 48e) plus the exit code where there is one.
     private static func describe(_ r: RunResult) -> String {
-        switch r {
-        case .ok: return "ok"
-        case .failed(let line, let code): return "\(line) (exit \(code))"
-        case .timedOut: return FeedRunner.timeoutText
-        case .crashed(let s): return "the engine stopped unexpectedly (signal \(s))"
-        case .launchFailed(let why): return "the engine could not start: \(why)"
-        }
+        guard let text = AppModel.failureText(r) else { return "ok" }
+        if case .failed(_, let code) = r { return "\(text) (exit \(code))" }
+        return text
     }
 }
 

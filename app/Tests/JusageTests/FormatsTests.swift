@@ -38,12 +38,15 @@ final class FormatsTests: XCTestCase {
         let f = try Fixture.feed()
         let m = f.accounts[0].meters[0]    // resets 00:10 next day
         XCTAssertEqual(Fmt.resetText(meter: m, now: Fixture.now), "2h 30m")
-        let after = m.resetsAt.addingTimeInterval(5)
+        let after = m.resetsAt!.addingTimeInterval(5)
         XCTAssertEqual(Fmt.resetText(meter: m, now: after), "Reset due, waiting for a fresh reading")
     }
 
     func testAgeWording() {
-        XCTAssertEqual(Fmt.age(30), "just now")
+        XCTAssertEqual(Fmt.age(40), "40 s ago")             // RULINGS 48g: seconds below a minute (J's example)
+        XCTAssertEqual(Fmt.age(0), "0 s ago")
+        XCTAssertEqual(Fmt.age(59.9), "59 s ago")
+        XCTAssertEqual(Fmt.age(60), "1 min ago")
         XCTAssertEqual(Fmt.age(23 * 60), "23 min ago")
         XCTAssertEqual(Fmt.age(7500), "2h 05m ago")
     }

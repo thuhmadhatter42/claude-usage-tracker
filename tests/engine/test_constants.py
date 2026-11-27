@@ -23,6 +23,7 @@ class ConstantsTests(unittest.TestCase):
             "RETRY_AFTER_CAP_S": 3600,
             "JITTER": 0.20,
             "MANUAL_FLOOR_S": 15,
+            "SERVICE_REFRESH_S": 600,           # RULING 29
             "KEYCHAIN_TIMEOUT_S": 30,
             "HTTP_TIMEOUT_S": 15,
             "DB_BUSY_S": 10,
@@ -50,7 +51,7 @@ class ConstantsTests(unittest.TestCase):
             "HERE", "REPO_ROOT", "STATE_DEFAULT", "STALE_AFTER_S", "RED_AT", "WARMUP_E",
             "SPAN_FLOOR_DIV", "RUNS_OUT_LANDING", "SESSION_S", "WEEK_S", "READ_EVERY_DEFAULT",
             "READ_EVERY_MIN", "READ_EVERY_MAX", "BACKOFF_S", "RETRY_AFTER_CAP_S", "JITTER",
-            "MANUAL_FLOOR_S", "KEYCHAIN_TIMEOUT_S", "HTTP_TIMEOUT_S", "DB_BUSY_S",
+            "MANUAL_FLOOR_S", "SERVICE_REFRESH_S", "KEYCHAIN_TIMEOUT_S", "HTTP_TIMEOUT_S", "DB_BUSY_S",
             "SHARE_MIN_INTERVAL_S", "USAGE_URL", "ANTHROPIC_BETA", "FINGERPRINT_TOL_S",
             "DISAGREE_PCT", "DISAGREE_RESET_S", "COLS", "FEED_SCHEMA", "LIVE_SCHEMA",
             "DB_SCHEMA", "REPORT_VERSION", "state_dir",

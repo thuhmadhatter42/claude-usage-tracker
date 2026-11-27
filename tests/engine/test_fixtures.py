@@ -217,7 +217,7 @@ def walk(o):
 
 class FeedFixtureTests(unittest.TestCase):
     TOP = ["schema", "version", "generated", "next_due", "rules", "me", "accounts", "totals", "windows",
-           "models", "projects", "months", "people", "statusline", "dashboard", "share", "notes"]
+           "models", "projects", "projects_today", "months", "people", "statusline", "dashboard", "share", "notes"]
     ACCOUNT = ["key", "number", "email", "uuid", "folders", "weekly_reset", "flags", "warning", "error",
                "no_session_meter", "meters", "session_share", "missing_people"]
     METER = ["id", "name", "pct", "resets_at", "read_at", "source", "period_s", "disagree", "pace", "split"]
@@ -291,6 +291,19 @@ class FeedFixtureTests(unittest.TestCase):
                         self.assertAlmostEqual((ro - gen).total_seconds(), want["runs_out_in_s"], delta=1)
                     n += 1
         self.assertGreaterEqual(n, 5)
+
+    def test_words_are_what_the_engine_writes(self):
+        """RULING 34: the golden words are E17's own text at `generated`; a clock is never in them
+        (RULING 4: `{runs_out}` is the placeholder the app fills in)."""
+        from ju import pace as pace_mod
+        from ju.contracts import Meter
+        gen = timeutil.parse_iso(self.feed["generated"])
+        for a in self.feed["accounts"]:
+            for m in a["meters"]:
+                with self.subTest(f"{a['number']}/{m['id']}"):
+                    meter = Meter(m["id"], m["name"], m["pct"], timeutil.parse_iso(m["resets_at"]), m["period_s"])
+                    self.assertEqual(m["pace"]["words"], pace_mod.pace(meter, gen).words)
+                    self.assertNotRegex(m["pace"]["words"].replace("{runs_out}", ""), r"\d:\d\d")
 
     def test_covers_each_state_and_a_stale_reading(self):
         states = {m["pace"]["state"] for a in self.feed["accounts"] for m in a["meters"]}

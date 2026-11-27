@@ -10,6 +10,7 @@ from ju import formats
 from ju.timeutil import parse_iso
 
 SEGS = 24
+PACE_STATES = ("green", "amber", "red")
 
 
 def esc(s) -> str:
@@ -56,7 +57,7 @@ def meter_html(meter_block: dict, now, rules: dict) -> str:
     attrs = [f'data-read-at="{esc(m["read_at"])}"']
     if m.get("resets_at"):
         attrs.append(f'data-reset="{esc(m["resets_at"])}"')
-    attrs.append(f'data-state="{state or "none"}"')
+    attrs.append(f'data-state="{state if state in PACE_STATES else "none"}"')   # a closed set: report data
     if not reset_due:
         words = pace["words"]
         if pace.get("runs_out") and "{runs_out}" in words:

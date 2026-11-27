@@ -31,14 +31,14 @@ struct AccountBlockModel: Identifiable, Equatable {
 
     static func make(account a: Feed.Account, feed: Feed, settings: AppSettings, time: DisplayTime, own: Bool) -> AccountBlockModel {
         let flags = a.flags.compactMap { flagText[$0] }
-        var hover = [a.email] + flags.map(\.hover)
+        var hover = [a.identity] + flags.map(\.hover)
         if let w = a.warning { hover.append(w) }
 
         var seen = Set<String>()
         let missing = a.missingPeople.filter { seen.insert($0).inserted }.map { "\($0): not reported yet (update jusage)" }
 
         return AccountBlockModel(
-            id: a.key, name: localPart(a.email),
+            id: a.key, name: a.label,
             resetText: "Resets \(a.weeklyReset.map(time.clock) ?? "—")",
             flagWords: flags.map(\.word), headerHover: hover.joined(separator: "\n"), missingLines: missing,
             meters: MeterRowModel.ordered(a.meters).map {

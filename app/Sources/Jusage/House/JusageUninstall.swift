@@ -9,7 +9,8 @@ import ServiceManagement
 //   2. the login item is switched off.
 //   3. the `alias jusage=` lines in ~/.zshrc and ~/.bashrc go. The file is copied to the Trash first (never
 //      deleted outright), then rewritten without those lines.
-// `jusage uninstall` (the CLI) does step 1 itself before it calls the same script.
+// `jusage uninstall` (the CLI) does all three itself (step 2 through `Jusage --login-item-off`) before it calls
+// the same script (RULING 39).
 
 enum JusageUninstall {
     /// The two rc files install.sh writes the alias into.
@@ -46,6 +47,26 @@ enum JusageUninstall {
             changed.append(name)
         }
         return changed
+    }
+
+    /// What "restore the status line" means when the engine cannot start (bring-up refused): read the engine's
+    /// own record (`config.json` in the state folder; the release default is `~/.claude-usage`). No wrapped entry
+    /// (none ever, or all switched off) = nothing to restore, exit 0. A wrapped one, or a record that cannot be
+    /// read, = exit 2 with the by-hand step, so a status line is never left pointing at a removed app.
+    static func statusLineOffWithoutEngine(stateDir: String?, home: String) -> (Int32, String) {
+        let dir = stateDir ?? (home as NSString).appendingPathComponent(".claude-usage")
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("config.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return (0, "no status line was ever wrapped") }
+        let byHand = "Put each wrapped statusLine back from its \"original\" entry in \(url.path), then uninstall again."
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return (2, "The engine is not running and \(url.path) could not be read. \(byHand)")
+        }
+        let records = (json["statusline"] as? [String: Any])?.values.compactMap { $0 as? [String: Any] } ?? []
+        if records.contains(where: { ($0["enabled"] as? Bool) == true }) {
+            return (2, "The engine is not running and the Claude Code status line is still wrapped. \(byHand)")
+        }
+        return (0, "no status line is wrapped")
     }
 
     struct Prep {

@@ -4,8 +4,10 @@ import Combine
 /// S5: the app's settings, one typed record (R-145, R-146, R-148). Keys are folder keys and install ids, never
 /// emails or first names. Stored as JSON under `settings.v2` in the app's UserDefaults (bundle id unchanged).
 
+/// The panel's Show toggles that hide a whole part (R-84, RULINGS 48a): Claude's meters (the account blocks),
+/// open 5-hour windows, today's totals, other people, busiest models, busiest projects.
 enum Section: String, Codable, CaseIterable {
-    case today, people, models, projects
+    case meters, windows, today, people, models, projects
 }
 
 typealias FoldId = String
@@ -79,7 +81,7 @@ private struct LatchCodingKey: CodingKey {
 
 struct LatchState: Codable, Equatable {
     /// The meter's reset time when this latch was last set; a different cycle starts when it moves far enough.
-    var cycleResetsAt: Date
+    var cycleResetsAt: Date?
     /// True while the condition has fired and not yet recovered.
     var fired: Bool
     /// True once anything fired in this cycle (decides whether a reset is worth a notification).
@@ -175,17 +177,42 @@ final class SettingsStore: ObservableObject {
         load()
     }
 
-    /// Reads the stored record; none or an unreadable one gives the defaults.
+    static let corruptKeyPrefix = "settings.v2.corrupt."
+
+    /// Why the stored record could not be read; nil when it was read or none was stored. While set, the stored
+    /// record is never written over: bring-up refuses (the Python path and the notification record inside it
+    /// survive) and a copy is kept under `corruptKeyPrefix`.
+    private(set) var loadProblem: String?
+
+    /// Reads the stored record. None = a first run (defaults). An unreadable one is never silently reset: the
+    /// problem is kept for bring-up to refuse on, and the raw data is copied aside.
     func load() {
-        guard let data = defaults.data(forKey: SettingsStore.key),
-              let s = try? JSONDecoder().decode(AppSettings.self, from: data) else {
+        loadProblem = nil
+        guard let data = defaults.data(forKey: SettingsStore.key) else { settings = AppSettings(); return }
+        do {
+            settings = try JSONDecoder().decode(AppSettings.self, from: data)
+        } catch {
             settings = AppSettings()
-            return
+            let stamp = ISO8601DateFormatter().string(from: Date())
+            let copyKey = SettingsStore.corruptKeyPrefix + stamp
+            defaults.set(data, forKey: copyKey)
+            loadProblem = "\(Self.describe(error)); a copy was kept as \(copyKey)"
         }
-        settings = s
+    }
+
+    private static func describe(_ error: Error) -> String {
+        guard let e = error as? DecodingError else { return error.localizedDescription }
+        func path(_ c: DecodingError.Context) -> String { c.codingPath.map(\.stringValue).joined(separator: ".") }
+        switch e {
+        case .keyNotFound(let k, let c): return "missing \((c.codingPath.map(\.stringValue) + [k.stringValue]).joined(separator: "."))"
+        case .typeMismatch(_, let c), .valueNotFound(_, let c): return "wrong value at \(path(c))"
+        case .dataCorrupted(let c): return c.codingPath.isEmpty ? "not a settings record" : "unreadable value at \(path(c))"
+        @unknown default: return "unreadable"
+        }
     }
 
     func save() {
+        guard loadProblem == nil else { return }   // never write over a record we could not read
         if let data = try? JSONEncoder().encode(settings) { defaults.set(data, forKey: SettingsStore.key) }
     }
 
@@ -208,7 +235,7 @@ final class SettingsStore: ObservableObject {
         var s = settings
         var dropped: [String] = []
 
-        let byEmail = Dictionary(feed.accounts.map { ($0.email, $0.key) }, uniquingKeysWith: { a, _ in a })
+        let byEmail = Dictionary(feed.accounts.compactMap { a in a.email.map { ($0, a.key) } }, uniquingKeysWith: { a, _ in a })
         let allPeople = feed.people.map { ($0.user, $0.installId) } + [(feed.me.user, feed.me.installId)]
         let byName = Dictionary(allPeople, uniquingKeysWith: { a, _ in a })
 

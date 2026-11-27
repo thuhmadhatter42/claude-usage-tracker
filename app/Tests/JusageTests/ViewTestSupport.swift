@@ -4,8 +4,10 @@ import SwiftUI
 
 /// Stand-ins for the house kit and the host, so the views are tested without them (W3-C pastes the real log,
 /// W3-A wires the real engine runner).
-final class ViewLogStub: HouseLog {
+final class ViewLogStub: HostLog {
     private(set) var lines: [String] = []
+    func info(_ category: String, _ message: String) {}
+    func warn(_ category: String, _ message: String) {}
     func error(_ category: String, _ message: String) { lines.append("\(category): \(message)") }
 }
 
@@ -38,7 +40,7 @@ enum ViewFixture {
     }
 
     @MainActor
-    static func services(log: HouseLog = ViewLogStub(), engine: ViewEngineStub = ViewEngineStub(),
+    static func services(log: HostLog = ViewLogStub(), engine: ViewEngineStub = ViewEngineStub(),
                          loginError: String? = nil) -> PanelServices {
         PanelServices(
             shortcuts: [:], log: log, refresh: {}, openDashboard: { _ in }, houseMenu: [],

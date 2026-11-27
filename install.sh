@@ -26,6 +26,8 @@ set -u
 REPO_URL="${JUSAGE_REPO_URL:-https://github.com/thuhmadhatter42/claude-usage-tracker}"
 DOWNLOAD_BASE="${JUSAGE_DOWNLOAD_BASE:-https://github.com/thuhmadhatter42/claude-usage-tracker/releases/latest/download}"
 BUNDLE_ID="com.goatdguild.jusage"
+TEAM_ID="9WTFGV63S2"            # the only Developer ID team jusage installs from (J Shriver)
+TEAM_REQ="anchor apple generic and certificate leaf[subject.OU] = \"$TEAM_ID\""
 STATE="$HOME/.claude-usage"
 LOG="$STATE/logs/install.log"
 REPORTS=""; USER_NAME=""; PROJECTS=""; SOURCE_DIR=""; NO_LAUNCH=""
@@ -129,6 +131,13 @@ trash_path() {
   elif [ -x /usr/bin/trash ]; then /usr/bin/trash "$1"
   else osascript -e "tell application \"Finder\" to delete POSIX file \"$1\"" >/dev/null; fi
 }
+# signed_by_team <path>: notarized by somebody is not enough (a hijacked release could be anyone's
+# paid account). The signature must satisfy a requirement naming TEAM_ID, and codesign's own report
+# of the signer must say that team too.
+signed_by_team() {
+  codesign --verify --strict -R="$TEAM_REQ" "$1" >>"$LOG" 2>&1 || return 1
+  [ "$(codesign -dv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p')" = "$TEAM_ID" ]
+}
 # The engine runs with -B so no bytecode is written into a signed app bundle.
 engine()     { "$PY" -B -E -s "$ENGINE_DIR/claude_usage.py" "$@" >>"$LOG" 2>&1; }
 engine_out() { "$PY" -B -E -s "$ENGINE_DIR/claude_usage.py" "$@" 2>>"$LOG"; }
@@ -139,6 +148,7 @@ if [ -n "$SOURCE_DIR" ]; then
   command -v git >/dev/null 2>&1 || die "git was not found. Install the Command Line Tools, then run this installer again."
   HOME_REAL="$(cd -P "$HOME" && pwd)"
   case "/${SOURCE_DIR}/" in */../*) die "The folder must not contain '..': $SOURCE_DIR (it has to be inside your home, $HOME_REAL)." ;; esac
+  case "$SOURCE_DIR" in *'$'*|*'`'*|*'"'*|*'\'*) die "The folder must not contain \$, \`, \" or \\ (the jusage alias would run them): $SOURCE_DIR" ;; esac
   DIR="$(resolve_loose "$SOURCE_DIR")"
   case "$DIR" in "$HOME_REAL"/?*) ;; *) die "The install folder must be inside your home ($HOME_REAL), e.g. ~/jusage; not $DIR." ;; esac
   if [ -d "$DIR" ] && [ -n "$(/bin/ls -A "$DIR" 2>/dev/null)" ] && [ ! -f "$DIR/engine/claude_usage.py" ] && [ ! -f "$DIR/claude_usage.py" ]; then
@@ -165,10 +175,12 @@ else
   ok "downloaded jusage-latest.dmg"
   spctl -a -t open --context context:primary-signature -v "$DMG" >>"$LOG" 2>&1 \
     || die "macOS does not accept the downloaded disk image as a notarized app. Nothing was installed."
+  signed_by_team "$DMG" || die "The disk image is not signed by jusage's developer (team $TEAM_ID). Nothing was installed."
   MNT="$TMP/mnt"; mkdir "$MNT"
   hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG" >>"$LOG" 2>&1 || die "Could not open the downloaded disk image."
   [ -d "$MNT/jusage.app" ] || die "The disk image holds no jusage.app."
   spctl -a -vv "$MNT/jusage.app" >>"$LOG" 2>&1 || die "macOS does not accept jusage.app (Gatekeeper). Nothing was installed."
+  signed_by_team "$MNT/jusage.app" || die "jusage.app is not signed by jusage's developer (team $TEAM_ID). Nothing was installed."
   got_id="$(plutil -extract CFBundleIdentifier raw -o - "$MNT/jusage.app/Contents/Info.plist" 2>/dev/null || true)"
   [ "$got_id" = "$BUNDLE_ID" ] || die "The app in the disk image has bundle id '${got_id:-none}', expected $BUNDLE_ID. Nothing was installed."
   NEW_VER="$(plutil -extract CFBundleShortVersionString raw -o - "$MNT/jusage.app/Contents/Info.plist" 2>/dev/null || true)"
@@ -259,6 +271,7 @@ fi
 # ---------------------------------------------------------------- 7. the `jusage` command
 # The alias carries its own quotes; a ' in the path is escaped; the replacement goes through the environment
 # so no character of the path is ever interpreted by sed or awk.
+case "$CLI" in *'$'*|*'`'*|*'"'*|*'\'*) die "The jusage folder must not contain \$, \`, \" or \\ (the alias would run them): $CLI" ;; esac
 QUOTE="'\\''"
 ALIAS_LINE="alias jusage='\"${CLI//\'/$QUOTE}\"'"
 for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do

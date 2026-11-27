@@ -15,10 +15,10 @@ struct PersonFoldModel: Identifiable, Equatable {
 
 enum PeopleModel {
     static func make(feed: Feed, settings: AppSettings, time: DisplayTime) -> [PersonFoldModel] {
-        let hiddenUUIDs = Set(feed.accounts.filter { !settings.isAccountShown($0.key) }.map(\.uuid))
+        let hiddenUUIDs = Set(feed.accounts.filter { !settings.isAccountShown($0.key) }.compactMap(\.uuid))
         return feed.people.filter { settings.isPersonShown($0.installId) }.map { p in
             let fresh = freshness(readAt: p.generated, error: nil, resetsAt: nil, now: time.now, staleAfter: feed.rules.staleAfterS)
-            let accounts = p.accounts.filter { !hiddenUUIDs.contains($0.uuid) }.sorted { $0.number < $1.number }
+            let accounts = p.accounts.filter { !($0.uuid.map(hiddenUUIDs.contains) ?? false) }.sorted { $0.number < $1.number }
             return PersonFoldModel(
                 id: p.installId, foldId: FoldID.person(p.installId), title: p.user,
                 trailing: "\(Fmt.tokens(p.today.tokens ?? 0)) · \(Fmt.usd(p.today.usd ?? 0))",

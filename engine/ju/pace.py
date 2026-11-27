@@ -50,11 +50,11 @@ def _landing_words(landing: Fraction) -> str:
 
 def pace(m: Meter, now: datetime, read_at: Optional[datetime] = None) -> Pace:
     """Forecast, colour and runs-out for one meter. `state` is None (no colour: the app draws it
-    grey) when the reset is due or, if `read_at` is given, the reading is older than
+    grey) when the reset is due or, if `read_at` is given, the reading is at least
     STALE_AFTER_S. `runs_out` is a timestamp; the words carry the `{runs_out}` placeholder for the
     app to fill in with the Mac's clock (RULING 4)."""
     now = _aware(now)
-    stale = read_at is not None and _secs(now - _aware(read_at)) > STALE_AFTER_S
+    stale = read_at is not None and _secs(now - _aware(read_at)) >= STALE_AFTER_S
     used = Fraction(repr(m.pct)) if isinstance(m.pct, float) else Fraction(m.pct)
     L = Fraction(m.period_s)
 

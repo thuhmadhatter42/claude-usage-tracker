@@ -8,6 +8,7 @@ import Foundation
 ///   2. `Contents/Resources/VERSION` equals `CFBundleShortVersionString`
 ///   3. dev separation (SCORE §6): a `.dev` bundle id carries `JusageStateDir`, a release one never does
 ///   4. `themes.json` is valid (S4), then it becomes `ThemeBook.current`
+///   4b. the saved settings are readable (a damaged record refuses and is kept, never reset)
 ///   5. Python: the recorded path must exist and pass the 3.9 + sqlite3 check; none recorded → probe once and
 ///      record the first that passes; a recorded one that is gone refuses (no re-probe)
 
@@ -25,6 +26,24 @@ struct Engine: Equatable {
 
 struct Refusal: Error, Equatable {
     let line: String
+}
+
+/// A refusal or a failed run is never silent (SCORE §3): one HostLog line and the panel's one plain line (the
+/// model's `runError`); the host then runs no engine. The host's only path for both.
+@MainActor
+enum HostFailure {
+    static func refuse(_ r: Refusal, log: HostLog, model: AppModel, now: Date = Date()) {
+        log.error("bringup", r.line)
+        model.apply(.failed(line: r.line, exit: 2), now: now)
+    }
+
+    /// After `model.apply(run)`: true for a good feed; otherwise the failure (including a feed the app refused
+    /// to decode, e.g. a wrong schema) is logged once, here (RULINGS 48d).
+    static func ranOK(_ r: RunResult, model: AppModel, log: HostLog) -> Bool {
+        if case .ok = r, model.runError == nil, model.feed != nil { return true }
+        log.error("engine", "run failed: \(model.runError ?? AppModel.failureText(r) ?? "no reason given")")
+        return false
+    }
 }
 
 /// How bring-up asks about a Python. The app uses `SystemPython`; tests use a fake.
@@ -132,6 +151,11 @@ enum BringUp {
         case .success(let f): facts = f
         }
 
+        if let problem = settings.loadProblem {
+            return .failure(Refusal(line: "jusage: the saved settings could not be read (\(problem)). Nothing was changed. "
+                + "Quit jusage and run `defaults delete \(bundle.bundleIdentifier ?? "<bundle id>") \(SettingsStore.key)` to start fresh, or reopen the jusage that wrote them."))
+        }
+
         let path: String
         var recordedNow = false
         if let recorded = settings.settings.pythonPath {
@@ -158,6 +182,9 @@ enum BringUp {
 
     /// `--set-python <path>` (the installer passes it): records a good one; a bad one is refused and the old kept.
     static func setPython(_ path: String, settings: SettingsStore, python: PythonChecking = SystemPython()) -> Refusal? {
+        if let problem = settings.loadProblem {
+            return Refusal(line: "jusage: --set-python was not recorded: the saved settings could not be read (\(problem)).")
+        }
         guard path.hasPrefix("/") else { return Refusal(line: "jusage: --set-python needs an absolute path, not '\(path)'.") }
         guard python.exists(path), python.passes(path) else {
             let kept = settings.settings.pythonPath.map { "kept \($0)" } ?? "none recorded"

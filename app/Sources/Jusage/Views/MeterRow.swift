@@ -47,7 +47,7 @@ struct MeterRowModel: Equatable, Identifiable {
     static func make(meter m: Feed.Meter, account a: Feed.Account, feed: Feed, settings: AppSettings,
                      time: DisplayTime, own: Bool) -> MeterRowModel {
         let fresh = feed.freshness(of: m, in: a, now: time.now)
-        let resetPassed = m.resetsAt <= time.now || m.pace.resetDue
+        let resetPassed = (m.resetsAt.map { $0 <= time.now } ?? false) || m.pace.resetDue
         let tone: FillTone = (fresh.isStale ? nil : m.pace.state).map { .state($0) } ?? .grey
         let coloured = tone != .grey
 
@@ -57,7 +57,7 @@ struct MeterRowModel: Equatable, Identifiable {
         let line: Double? = resetPassed ? nil : min(max(m.pace.e, 0), 1)
 
         var runsOut: String? = nil
-        if own, coloured, settings.warnRunsOut, let r = m.pace.runsOut, r < m.resetsAt { runsOut = "Runs out \(time.clock(r))" }
+        if own, coloured, settings.warnRunsOut, let r = m.pace.runsOut, m.resetsAt.map({ r < $0 }) ?? true { runsOut = "Runs out \(time.clock(r))" }
 
         let pct = TitleModel.pctText(m.pct)
         let period = m.id == "session" ? "session" : "week"
@@ -71,7 +71,8 @@ struct MeterRowModel: Equatable, Identifiable {
         hover.append("Bright fill: \(pct) used.")
         if let landing = m.pace.landing, shadow != nil { hover.append("Dark fill: about \(whole(landing))% by the reset at this pace.") }
         if let e = line { hover.append("White line: \(whole(e * 100))% of the \(period) gone.") }
-        hover.append(resetPassed ? "\(Fmt.resetDueText)." : "Resets \(time.clock(m.resetsAt)).")
+        if resetPassed { hover.append("\(Fmt.resetDueText).") }
+        else if let at = m.resetsAt { hover.append("Resets \(time.clock(at)).") }
         hover.append("From \(sourceName(m.source)), \(Fmt.age(time.age(of: m.readAt))).")
         switch tone {
         case .grey:
@@ -89,8 +90,8 @@ struct MeterRowModel: Equatable, Identifiable {
         case .state(let s): stateWord = s.rawValue
         case .grey: stateWord = "grey, not current"
         }
-        let resetWord = resetPassed ? "reset due" : "resets \(time.clock(m.resetsAt))"
-        let voiceOver = "\(m.name), \(whole(m.pct)) percent used, \(stateWord), \(resetWord)."
+        let resetWord = resetPassed ? ", reset due" : (m.resetsAt.map { ", resets \(time.clock($0))" } ?? "")
+        let voiceOver = "\(m.name), \(TitleModel.whole(m.pct)) percent used, \(stateWord)\(resetWord)."
 
         return MeterRowModel(id: m.id, label: settings.labels ? m.name : nil, used: used, shadow: shadow, line: line,
                              tone: tone, pctText: pct, countdown: Fmt.resetText(meter: m, now: time.now),

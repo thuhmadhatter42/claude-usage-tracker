@@ -52,12 +52,8 @@ final class ContentViewTests: XCTestCase {
         XCTAssertEqual(tab, .month)
     }
 
-    func testFailuresLoggedOncePerChange() throws {
+    func testFeedProblemsLogged() throws {
         let log = ViewLogStub()
-        PanelFailureLog.runError(from: nil, to: "Engine sent feed schema 3; this app reads 2", log: log)
-        PanelFailureLog.runError(from: "Engine sent feed schema 3; this app reads 2", to: "Engine sent feed schema 3; this app reads 2", log: log)
-        PanelFailureLog.runError(from: "Engine sent feed schema 3; this app reads 2", to: nil, log: log)
-        XCTAssertEqual(log.lines, ["feed: Engine sent feed schema 3; this app reads 2"])
         let f = try ViewFixture.feed { a in a[0]["error"] = ["kind": "new_kind", "text": "x", "until": NSNull()] }
         PanelFailureLog.feedArrived(f, log: log)
         XCTAssertEqual(log.lines.last, "feed: unknown error kind new_kind")

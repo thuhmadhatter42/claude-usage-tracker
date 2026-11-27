@@ -1,14 +1,14 @@
 """D2: the page's sections. `DashModel.build` does the aggregation once; each section is one
 function `(model) -> str`, testable alone (R-136).
 
-Input: report v3 dicts as `share.load_reports` returns them (E20):
-  user, host, install_id, generated (ISO), legacy (True for pre-0.1.22 reports, else absent),
-  accounts [{key_hash, number, email, uuid}]   (a legacy report: [label, ...]),
-  live {uuid: feed §1.7 account block}         (a legacy report: {label: {...}}),
-  days {YYYY-MM-DD: {input, cache_5m, cache_1h, cache_read, output, calls, cost, unpriced,
-        models {model id: {<COLS>, tokens, calls, cost}}, accounts {uuid: {tokens, cost}},
-        projects {name: {tokens, cost}}}},
-  blocks {uuid: [{start, end, tokens, ...}]}.
+Input: `share.Report` objects exactly as `share.load_reports` returns them (E20), and the people
+are E20's `share.people()` (RULING 35: one owner of "one person"; D2 only lays them out):
+  user, host, install_id, generated (aware datetime), legacy (no account ids: counted, never split),
+  accounts [{number, email, uuid}], live {uuid: feed §1.7 account block, key acct:<uuid>, folders []},
+  days {YYYY-MM-DD: {input, cache_5m, cache_1h, cache_read, output, calls, usd, unpriced,
+        models {model id: {<COLS>, tokens, calls, usd}}, accounts {uuid: {tokens, usd}},
+        projects {name: {tokens, usd}}}},
+  blocks {uuid: [{start, end, tokens, calls, usd}]}.
 Every time is compared as an instant (R-116); every number that can age carries `data-read-at` so the
 page script greys it on the reader's clock (R-52, R-121)."""
 from __future__ import annotations
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
-from ju import formats
+from ju import formats, share, timeutil
 from ju.constants import COLS
 from ju.dash import meters as meters_mod
 from ju.dash.meters import esc
@@ -51,17 +51,34 @@ def _api(v: float) -> str:
 
 @dataclass
 class Person:
-    pid: str                      # the first install id, sorted: the person's key on the page
-    user: str
-    hosts: List[str]
-    reports: List[dict]
-    generated: str                # newest report time, ISO
+    """How the page lays out one of E20's people: a stable key, a colour slot, the day parts."""
+    of: share.Person
     slot: int = 0
+
+    @property
+    def pid(self) -> str:         # the first install id, sorted: the person's key on the page
+        return self.of.install_ids[0]
+
+    @property
+    def user(self) -> str:
+        return self.of.user
+
+    @property
+    def reports(self) -> List[share.Report]:
+        return self.of.reports
+
+    @property
+    def hosts(self) -> List[str]:
+        return sorted({r.host for r in self.of.reports})
+
+    @property
+    def generated(self) -> str:   # newest report time, ISO
+        return timeutil.iso(self.of.generated)
 
     def days(self) -> Dict[str, List[dict]]:
         out: Dict[str, List[dict]] = defaultdict(list)
-        for r in self.reports:
-            for d, a in r["days"].items():
+        for r in self.of.reports:
+            for d, a in r.days.items():
                 out[d].append(a)
         return out
 
@@ -97,41 +114,21 @@ class DashModel:
         return (self.now - parse_iso(iso_text)).total_seconds() >= self.rules["stale_after_s"]
 
     @classmethod
-    def build(cls, reports: List[dict], now: datetime, rules: dict, notes: List[str]) -> "DashModel":
+    def build(cls, reports: List[share.Report], now: datetime, rules: dict, notes: List[str]) -> "DashModel":
         rules["stale_after_s"]                          # required; a KeyError names it
         today = now.date()
         emails = {}
         for r in reports:
-            if not r.get("legacy"):
-                for a in r["accounts"]:
+            for a in r.accounts:
+                if a["email"]:
                     emails[a["uuid"]] = a["email"]
-        people = _people(reports)
+        people = sorted((Person(p) for p in share.people(reports, now)), key=lambda p: (p.user.lower(), p.pid))
+        for i, p in enumerate(people):
+            p.slot = i % 8
         groups = _groups(reports, now, rules)
         charts, models30, months, unpriced = _aggregate(people, today, emails)
         return cls(now=now, rules=rules, notes=list(notes), today=today, people=people, groups=groups,
                    charts=charts, models30=models30, months=months, unpriced_month=unpriced, emails=emails)
-
-
-def _people(reports: List[dict]) -> List[Person]:
-    """One person per (user, account uuid set): two Macs of one person count once; files stay keyed
-    by install id (R-123). A legacy report has no uuids, so it is a person of its own."""
-    by: Dict[tuple, List[dict]] = {}
-    for r in reports:
-        if r.get("legacy"):
-            key = (r["user"], ("legacy", r["install_id"]))
-        else:
-            key = (r["user"], frozenset(a["uuid"] for a in r["accounts"]))
-        by.setdefault(key, []).append(r)
-    people = []
-    for (user, _), reps in by.items():
-        reps.sort(key=lambda r: r["install_id"])
-        newest = max(reps, key=lambda r: parse_iso(r["generated"]))
-        people.append(Person(pid=reps[0]["install_id"], user=user,
-                             hosts=sorted({r["host"] for r in reps}), reports=reps, generated=newest["generated"]))
-    people.sort(key=lambda p: (p.user.lower(), p.pid))
-    for i, p in enumerate(people):
-        p.slot = i % 8
-    return people
 
 
 def _newest_read(block: dict) -> Optional[datetime]:
@@ -139,7 +136,7 @@ def _newest_read(block: dict) -> Optional[datetime]:
     return max(times) if times else None
 
 
-def _groups(reports: List[dict], now: datetime, rules: dict) -> List[Group]:
+def _groups(reports: List[share.Report], now: datetime, rules: dict) -> List[Group]:
     """Plan meters belong to an account, not to a person or a Mac: group by uuid and show the
     freshest usable reading once. A fresh reading always outranks a stale one; among equals the
     newest instant wins (R-127)."""
@@ -147,20 +144,19 @@ def _groups(reports: List[dict], now: datetime, rules: dict) -> List[Group]:
     groups: Dict[str, Group] = {}
     legacy_n = 0
     for r in reports:
-        if r.get("legacy"):
-            for label in sorted(r["live"]):
-                legacy_n += 1
-                groups[f"legacy{legacy_n}"] = Group(key=f"acct:legacy-{r['install_id']}-{legacy_n}",
-                                                    label=label, legacy=True, users=[r["user"]])
+        if r.legacy:              # no account ids, so its accounts cannot be named or matched: one row
+            legacy_n += 1
+            groups[f"legacy{legacy_n}"] = Group(key=f"acct:legacy-{r.key}-{legacy_n}",
+                                                label=f"{r.user}'s accounts ({r.host})", legacy=True, users=[r.user])
             continue
-        for uuid, block in r["live"].items():
-            g = groups.setdefault(uuid, Group(key=f"acct:{uuid}", label=block["email"], legacy=False))
-            g.users.append(r["user"])
+        for uuid, block in r.live.items():
+            g = groups.setdefault(uuid, Group(key=f"acct:{uuid}", label=block.get("email") or uuid, legacy=False))
+            g.users.append(r.user)
             at = _newest_read(block)
             fresh = at is not None and (now - at).total_seconds() < stale_after
             rank = (fresh, at.timestamp() if at else float("-inf"))
             if g.best is None or rank > g.best[0]:
-                g.best = (rank, r["user"], r["host"], block)
+                g.best = (rank, r.user, r.host, block)
     return sorted(groups.values(), key=lambda g: (g.legacy, g.label.lower()))
 
 
@@ -185,7 +181,7 @@ def _aggregate(people: List[Person], today: date, emails: Dict[str, str]):
                 day_type[d]["cache_read"] += a.get("cache_read", 0)
                 day_type[d]["output"] += a.get("output", 0)
                 day_person[d][p.pid] += _day_tokens(a)
-                day_cost[d] += a.get("cost", 0)
+                day_cost[d] += a.get("usd", 0)
                 if d[:7] == month_key:
                     unpriced += a.get("unpriced", 0)
                 for acct, x in (a.get("accounts") or {}).items():
@@ -198,7 +194,7 @@ def _aggregate(people: List[Person], today: date, emails: Dict[str, str]):
                     if d >= lo30:
                         for k in COLS:
                             model30[mid][k] += x.get(k, 0)
-                        for k in ("tokens", "calls", "cost"):
+                        for k in ("tokens", "calls", "usd"):
                             model30[mid][k] += x.get(k, 0)
 
     days7 = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
@@ -261,12 +257,12 @@ def today_panels(model: DashModel) -> str:
         days = p.days()
         today_parts = days.get(tday, [])
         t1 = sum(_day_tokens(a) for a in today_parts)
-        c1 = sum(a.get("cost", 0) for a in today_parts)
+        c1 = sum(a.get("usd", 0) for a in today_parts)
         calls = sum(a.get("calls", 0) for a in today_parts)
 
         def window(lo):
             parts = [a for d, ps in days.items() if d >= lo for a in ps]
-            return sum(_day_tokens(a) for a in parts), sum(a.get("cost", 0) for a in parts)
+            return sum(_day_tokens(a) for a in parts), sum(a.get("usd", 0) for a in parts)
 
         t7, c7 = window(lo7)
         t30, c30 = window(lo30)
@@ -274,11 +270,11 @@ def today_panels(model: DashModel) -> str:
                  f"<div class='stat'><div class='v'>{_api(c1)}</div><div class='l'>API-rate</div></div>",
                  f"<div class='stat sm'><div class='v'>{calls:,}</div><div class='l'>calls</div></div>"]
         for r in p.reports:
-            if r.get("legacy"):
+            if r.legacy:
                 continue
-            for uuid, bl in sorted(r.get("blocks", {}).items()):
+            for uuid, bl in sorted(r.blocks.items()):
                 if bl and parse_iso(bl[-1]["end"]) > model.now:
-                    tag = f"{model.emails.get(uuid, uuid)} · " if len(r["blocks"]) > 1 else ""
+                    tag = f"{model.emails.get(uuid, uuid)} · " if len(r.blocks) > 1 else ""
                     stats.append(f"<div class='stat sm' data-k='acct:{esc(uuid)}'><div class='v'>{formats.tokens(bl[-1]['tokens'])}</div>"
                                  f"<div class='l'>{esc(tag)}5-hour window, since {clock_html(bl[-1]['start'], model.now)}</div></div>")
         models_today = defaultdict(float)
@@ -297,7 +293,7 @@ def today_panels(model: DashModel) -> str:
                              f"<div class='l'>{esc(model.emails.get(acct, acct))}</div></div>")
         strip = (f"<div class='stat'><div class='v'>{formats.tokens(t7)}</div><div class='l'>7 days · {_api(c7)}</div></div>"
                  f"<div class='stat'><div class='v'>{formats.tokens(t30)}</div><div class='l'>30 days · {_api(c30)}</div></div>")
-        logged = sorted({a["email"] if isinstance(a, dict) else a for r in p.reports for a in r["accounts"]})
+        logged = sorted({a["email"] for r in p.reports for a in r.accounts if a["email"]})
         sub = "logged into: " + (", ".join(logged) if logged else "no account seen yet")
         cls = "panel today person" + (" stale" if model.stale(p.generated) else "")
         out.append(f"<section class='{cls}' data-k='person:{esc(p.pid)}' data-read-at=\"{esc(p.generated)}\" "
@@ -379,7 +375,7 @@ def models_table(model: DashModel) -> str:
             f"<td>{int(x['calls']):,}</td><td>{formats.tokens(int(x['input']))}</td>"
             f"<td>{formats.tokens(int(x['cache_5m'] + x['cache_1h']))}</td><td>{formats.tokens(int(x['cache_read']))}</td>"
             f"<td>{formats.tokens(int(x['output']))}</td><td>{formats.tokens(int(x['tokens']))}</td>"
-            f"<td>{x['tokens'] / total * 100:.0f}%</td><td>{_api(x['cost'])}</td></tr>"
+            f"<td>{x['tokens'] / total * 100:.0f}%</td><td>{_api(x['usd'])}</td></tr>"
             for i, (mid, x) in enumerate(model.models30))
         body = (f"<div class='wrap'><table><tr><th>model</th><th>calls</th><th>input</th><th>cache write</th><th>cache read</th>"
                 f"<th>output</th><th>total</th><th>share</th><th title=\"{esc(formats.API_RATE_LABEL)}\">{USD_HEAD}</th></tr>{rows}</table></div>")

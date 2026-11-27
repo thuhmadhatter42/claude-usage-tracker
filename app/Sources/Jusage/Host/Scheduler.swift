@@ -7,6 +7,8 @@ import Foundation
 /// of them was ⌘R (R-152).
 enum Trigger: Equatable {
     case tick, wake, sessionActive, panelOpen, manual
+    /// An engine setting was written: re-read the feed, never force a fetch (only ⌘R forces).
+    case settingsChanged
 }
 
 /// The single timer. Arming replaces whatever was armed before.
@@ -31,6 +33,8 @@ final class RunLoopTimer: SchedulerTimer {
 final class Scheduler {
     static let tick: TimeInterval = 30
     static let ceiling: TimeInterval = 300
+    /// A wake request this soon after a run started adds nothing.
+    static let wakeDebounce: TimeInterval = 5
 
     /// Starts one engine run; `done(nextDue)` is called on the main thread when it ends, with the feed's
     /// `next_due` after a good run and nil after a failed one (then only the ceiling and the triggers apply).
@@ -45,6 +49,7 @@ final class Scheduler {
     private var pending: Bool?            // a merged request during a run; true when any was forced
     private var nextDue: Date?
     private var lastRunEnd: Date?
+    private var lastRunStart: Date?
 
     init(now: @escaping () -> Date = Date.init, timer: SchedulerTimer = RunLoopTimer(),
          run: @escaping Run, onTick: @escaping (Date) -> Void) {
@@ -58,8 +63,10 @@ final class Scheduler {
         switch why {
         case .tick:
             fire()
-        case .wake, .sessionActive, .panelOpen, .manual:
+        case .wake, .sessionActive, .panelOpen, .manual, .settingsChanged:
             onTick(now())                 // numbers re-check their age at once (wake after a reset greys now)
+            // At wake the overdue timer and the wake notification both ask: one run, not two.
+            if why == .wake, let t = lastRunStart, now().timeIntervalSince(t) < Scheduler.wakeDebounce { return }
             begin(force: why == .manual)
         }
     }
@@ -82,6 +89,7 @@ final class Scheduler {
             return
         }
         running = true
+        lastRunStart = now()
         rearm()                           // the staleness tick keeps going while the run is out
         run(force) { [weak self] due in self?.finish(nextDue: due) }
     }

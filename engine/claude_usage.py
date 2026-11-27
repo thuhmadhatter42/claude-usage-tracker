@@ -35,7 +35,7 @@ import subprocess                                       # noqa: E402
 import traceback                                        # noqa: E402
 from dataclasses import dataclass, field               # noqa: E402
 from datetime import datetime, timedelta               # noqa: E402
-from typing import Callable, Dict, List, Optional      # noqa: E402
+from typing import Callable, Dict, List, Optional, Tuple      # noqa: E402
 
 from ju import (accounts, bringup, cli_report, config, constants, doctor, feed, fsutil, gate,  # noqa: E402
                 houselog, identity, keychain, ledger_db, ledger_query, ledger_scan, pricing as pricing_mod,
@@ -67,7 +67,7 @@ def version() -> str:
 def live_store() -> LiveStore:
     """E13 with E3's file calls and E2's log (RULING 14)."""
     return LiveStore(StoreIO(fsutil.write_private, fsutil.move_aside_corrupt, fsutil.read_json,
-                             fsutil.CorruptFile, houselog.log))
+                             fsutil.CorruptFile, houselog.log, usage_client.parse))
 
 
 def _login_warning(login) -> Optional[str]:
@@ -186,7 +186,7 @@ class Run:
         sl = _module("ju.statusline")
         store = live_store()
         accepted = []
-        fd = gate._lock(self.state)
+        fd = gate.fetch_lock(self.state)
         try:
             live = store.load(self.state, self.keys)
             uuids = {k: (accounts.read_identity(k, self.cfg) or (None, None))[1] for k in self.keys}
@@ -205,7 +205,7 @@ class Run:
                 others = {k: live.account(k).reset_anchor["minute_of_week"] for k in self.keys
                           if k != key and (uuids[k] is None or uuids[k] != uuids[key])
                           and live.account(k).reset_anchor["minute_of_week"] is not None}
-                reading, reason = sl.backup_reading(acc, cap, others, self.now, key=key)
+                reading, reason = sl.backup_reading(acc, cap, others, self.now, key=key, primary=True)
                 if reading is None:
                     houselog.log("info", "status-line capture rejected", folder=key, reason=reason)
                     continue
@@ -255,7 +255,12 @@ class Run:
                 return feed.StatuslineView(None, None, frozenset(), at)
             service = Reading(folder=block.key, fetched=acc.fetched, meters=list(usage_client.parse(acc.data).meters),
                               flags=[], uuid=acc.identity_uuid, source="service")
-            differ = frozenset(feed.STATUSLINE_METERS) if sl.disagree(service, capture) else frozenset()
+            try:
+                cap_reading = sl.capture_to_reading(capture, acc.identity_uuid)
+            except JusageError as e:
+                houselog.log("error", "status-line capture damaged; not compared", folder=block.key, why=str(e))
+                return feed.StatuslineView(None, None, frozenset(), at)
+            differ = frozenset(feed.STATUSLINE_METERS) if sl.disagree(service, cap_reading) else frozenset()
             return feed.StatuslineView(None, None, differ, at)
 
         return view
@@ -263,23 +268,27 @@ class Run:
     # ------------------------------------------------ E20 adapter (sharing)
 
     def own_windows(self, uuid: Optional[str]) -> List[dict]:
-        """This Mac's 5-hour windows of the last 8 days for the folders logged into `uuid`, priced:
-        [{"start", "end", "usd"}] with aware datetimes (what E20 prorates a split from)."""
+        """This Mac's 5-hour windows of the last 8 days for the folders logged into `uuid`, priced, in the
+        report's block shape E20's meter_split reads: [{"start": ISO, "end": ISO, "usd"}]."""
         folders = [k for k in self.keys if (accounts.read_identity(k, self.cfg) or (None, None))[1] == uuid]
         since = (self.now.astimezone().date() - timedelta(days=8)).isoformat()
         p = self.pricing()
         out = []
         for k in folders:
             for b in ledger_query.blocks(ledger_query.rows(self.conn(), since, k)):
-                out.append({"start": b.start, "end": b.end, "usd": ledger_query.sum_rows(b.rows, p).cost})
-        return sorted(out, key=lambda w: w["start"])
+                out.append({"start": timeutil.iso(b.start), "end": timeutil.iso(b.end),
+                            "usd": ledger_query.sum_rows(b.rows, p).cost})
+        return sorted(out, key=lambda w: timeutil.parse_iso(w["start"]))
 
-    def session_shares(self, refresh: gate.RefreshResult) -> Dict[str, dict]:
-        """{account uuid: session share (§1.7)} for the report (RULING 21), from the same E18 path as the feed."""
+    def report_parts(self, refresh: gate.RefreshResult) -> Tuple[Dict[str, dict], Dict[str, dict]]:
+        """(live, session_share) for the report, both keyed by account uuid (RULING 21): live is each
+        account's feed §1.7 block, built by the same E21 path as the feed; an account with no known
+        uuid cannot be matched by anyone and is left out. No account at all -> ({}, {}) (RULING 50)."""
         blocks = feed.account_blocks(cfg=self.cfg, refresh=refresh, conn=self.conn(), now=self.now,
                                      views=[feed.NO_CAPTURE] * len(refresh.accounts),
                                      split_view=lambda m, u, n: feed.NO_SPLIT)
-        return {b["uuid"]: b["session_share"] for b in blocks if b["uuid"] and b["session_share"]}
+        live = {b["uuid"]: b for b in blocks if b["uuid"]}
+        return live, {u: b["session_share"] for u, b in live.items() if b["session_share"]}
 
     def share(self, refresh: gate.RefreshResult, *, write: Optional[bool], changed: bool = False):
         """Write this Mac's report (write=True always, None = when E20's rule says, False never) and
@@ -291,9 +300,9 @@ class Run:
         last = datetime.fromtimestamp(mine.stat().st_mtime).astimezone() if mine.exists() else None
         due = write if write is not None else (last is None or sh.should_rewrite(last, changed, self.now))
         if due:
-            report = sh.build_report(self.conn(), self.cfg, refresh.live, self.pricing(),
-                                     projects=self.cfg.share_projects,
-                                     session_share=self.session_shares(refresh), now=self.now)
+            live, shares = self.report_parts(refresh)
+            report = sh.build_report(self.conn(), self.cfg, live, self.pricing(),
+                                     projects=self.cfg.share_projects, session_share=shares, now=self.now)
             sh.write_report(rd, report, self.cfg)
             last = datetime.fromtimestamp(mine.stat().st_mtime).astimezone() if mine.exists() else self.now
         reports, notes = sh.load_reports(rd, self.cfg.install_id)
@@ -310,8 +319,12 @@ class Run:
         def view(meter: Meter, uuid: Optional[str], now: datetime) -> feed.SplitView:
             if uuid not in windows:
                 windows[uuid] = self.own_windows(uuid)
-            split = sh.meter_split(meter, uuid, windows[uuid], reports, now,
-                                   me=(self.cfg.user, self.cfg.install_id))
+            try:
+                split = sh.meter_split(meter, uuid, windows[uuid], reports, now,
+                                       me=(self.cfg.user, self.cfg.install_id))
+            except Exception as e:     # one peer's data never takes the meter down (review-security 3)
+                houselog.log("error", "split not computed", meter=meter.id, error=str(e), trace=traceback.format_exc())
+                return feed.NO_SPLIT
             if split is None:
                 return feed.NO_SPLIT
             return feed.SplitView(split.to_feed(), list(split.missing))
@@ -323,11 +336,18 @@ class Run:
     def dashboard_path(self) -> Path:
         return self.state / DASHBOARD_NAME
 
-    def write_dashboard(self, reports, notes, out: Optional[Path] = None) -> Path:
-        page = _module("ju.dash.page")
+    def write_dashboard(self, out: Optional[Path] = None) -> Tuple[Path, int]:
+        """The page from every report in the shared folder, this Mac's own included (the page shows
+        everyone; the feed alone takes this Mac's numbers from the ledger). Returns (path, reports).
+        No report at all -> ConfigError, nothing written."""
+        sh, page = _module("ju.share"), _module("ju.dash.page")
+        rd = config.reports_dir(self.cfg, None, create=False)
+        reports, notes = sh.load_reports(rd, None)
+        if not reports:
+            raise ConfigError(f"no reports in {rd}; run `jusage share` first")
         path = Path(out) if out is not None else self.dashboard_path()
-        page.write(path, page.render(reports, notes, version(), self.now, feed.rules(self.cfg)))
-        return path
+        page.write(path, page.render(reports, list(notes), version(), self.now, feed.rules(self.cfg)))
+        return path, len(reports)
 
 
 # ---------------------------------------------------------------- commands
@@ -354,7 +374,11 @@ def cmd_live(run: Run) -> int:
     refresh = run.refresh(manual=run.args.force)
     reports = None
     if run.cfg.reports_dir:
-        reports = run.share(refresh, write=False)[0]
+        try:
+            reports = run.share(refresh, write=False)[0]
+        except Exception as e:     # a peer's file never hides this Mac's own meters (review-security 3)
+            houselog.log("error", "live: shared reports not read", error=str(e), trace=traceback.format_exc())
+            print(f"Shared reports not read: {e or type(e).__name__}", file=sys.stderr)
     cli_report.print_live(_account_feed(run, refresh, reports), run.now)
     if run.args.raw:
         print(json.dumps({k: a.data for k, a in sorted(refresh.live.accounts.items())}, indent=1))
@@ -375,11 +399,11 @@ def cmd_menu_json(run: Run) -> int:
             share["written_at"] = feed._iso(written)
             people = run.people(reports)
             if rewritten:
-                run.write_dashboard(reports, notes)
-        except (JusageError, OSError) as e:
+                run.write_dashboard()
+        except Exception as e:     # anything a peer's file causes: this Mac's own meters still ship (review-security 3)
             houselog.log("error", "menu-json: shared report not updated", error=str(e), trace=traceback.format_exc())
-            share["error"] = str(e)
-            reports = None
+            share["error"] = str(e) or type(e).__name__
+            reports, people, notes = None, [], []
         if run.dashboard_path().exists():
             dashboard = str(run.dashboard_path())
     out = feed.build_feed(cfg=run.cfg, refresh=refresh, conn=run.conn(), pricing=run.pricing(), now=run.now,
@@ -444,13 +468,12 @@ def _sharing_edit(args) -> Callable:
     return edit
 
 
-def _share_and_report(run: Run, refresh) -> tuple:
-    reports, notes, written, _ = run.share(refresh, write=True)
+def _share_and_report(run: Run, refresh) -> None:
+    _, notes, _, _ = run.share(refresh, write=True)
     print(f"wrote {config.reports_dir(run.cfg, None, create=False) / _module('ju.share').report_id(run.cfg)[2]}"
           + ("" if run.cfg.share_projects else "  (project names not shared; `--projects` includes them)"))
     for n in notes:
         print(n)
-    return reports, notes
 
 
 def cmd_share(run: Run) -> int:
@@ -466,11 +489,9 @@ def _open(path: Path) -> None:
         raise RuntimeError(f"could not open {path}: {(r.stderr or '').strip() or 'open failed'}")
 
 
-def _dashboard(run: Run, reports, notes) -> int:
-    if not reports:
-        raise ConfigError(f"no reports in {config.reports_dir(run.cfg, None, create=False)}; run `jusage share` first")
-    path = run.write_dashboard(reports, notes, Path(os.path.expanduser(run.args.out)) if run.args.out else None)
-    print(f"wrote {path}  ({len(reports)} report{'s' if len(reports) != 1 else ''})")
+def _dashboard(run: Run) -> int:
+    path, n = run.write_dashboard(Path(os.path.expanduser(run.args.out)) if run.args.out else None)
+    print(f"wrote {path}  ({n} report{'s' if n != 1 else ''})")
     if run.args.open:
         _open(path)
     return 0
@@ -478,9 +499,7 @@ def _dashboard(run: Run, reports, notes) -> int:
 
 def cmd_dashboard(run: Run) -> int:
     run.prepare(_sharing_edit(run.args))
-    sh = _module("ju.share")
-    reports, notes = sh.load_reports(config.reports_dir(run.cfg, None, create=False), run.cfg.install_id)
-    return _dashboard(run, reports, list(notes))
+    return _dashboard(run)
 
 
 def cmd_update(run: Run) -> int:
@@ -489,8 +508,8 @@ def cmd_update(run: Run) -> int:
     print(f"scanned: {s.new} new, {s.total} in the ledger")
     refresh = run.refresh(manual=False)
     cli_report.print_live(_account_feed(run, refresh), run.now)
-    reports, notes = _share_and_report(run, refresh)
-    return _dashboard(run, reports, notes)
+    _share_and_report(run, refresh)
+    return _dashboard(run)
 
 
 def cmd_doctor(run: Run) -> int:

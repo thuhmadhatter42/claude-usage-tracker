@@ -67,7 +67,7 @@
       "forecast": true,
       "runs_out": "2026-11-29T20:26:09-08:00",
       "reset_due": false,
-      "words": "At this pace you hit the limit Sun 20:26, 20h 33m before the reset."
+      "words": "At this pace you hit the limit {runs_out}, 20h 33m before the reset."
      },
      "split": {
       "period_start": "2026-11-23T17:00:00-08:00",
@@ -160,7 +160,7 @@
       "forecast": true,
       "runs_out": "2026-11-26T21:44:29-08:00",
       "reset_due": false,
-      "words": "2% left. Resets 23:00."
+      "words": "At this pace you hit the limit {runs_out}, 1h 15m before the reset."
      },
      "split": null
     },
@@ -180,7 +180,7 @@
       "forecast": true,
       "runs_out": "2026-11-29T15:54:17-08:00",
       "reset_due": false,
-      "words": "At this pace you hit the limit Sun 15:54, 66h 05m before the reset."
+      "words": "At this pace you hit the limit {runs_out}, 2d 18h before the reset."
      },
      "split": null
     }
@@ -249,6 +249,18 @@
    "tokens": 36480000
   }
  ],
+ "projects_today": [
+  {
+   "name": "jusage",
+   "share": 0.75,
+   "tokens": 4500000
+  },
+  {
+   "name": "subagents",
+   "share": 0.25,
+   "tokens": 1500000
+  }
+ ],
  "months": [
   {
    "key": "2026-11",
@@ -287,11 +299,15 @@
    "generated": "2026-11-26T21:38:00-08:00",
    "today": {
     "tokens": 5200000,
-    "usd": 18.0
+    "usd": 18.0,
+    "calls": 120,
+    "unpriced": 0
    },
    "week": {
     "tokens": 31000000,
-    "usd": 168.2
+    "usd": 168.2,
+    "calls": 610,
+    "unpriced": 0
    },
    "accounts": [
     {

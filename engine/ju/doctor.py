@@ -44,7 +44,7 @@ def _keychain(key: str, hints, env, now: datetime, probe: Callable) -> (List[str
     """(lines, chosen service or None, failure text or None). Same order as keychain.find_login."""
     lines = ["  Keychain items tried, in order (the first holding a login wins):"]
     services = list(keychain.candidate_services(key, hints, env))
-    if keychain._legacy_allowed(key, hints, env):
+    if keychain.legacy_allowed(key, hints, env):
         services.append(keychain.LEGACY_SERVICE)
     chosen = failure = None
     rows = []
@@ -153,7 +153,7 @@ def run(state, env: Mapping[str, str], *, store: LiveStore, now: Optional[dateti
             at = timeutil.parse_iso(cap["captured_at"])
             age = (now - at).total_seconds()
             cap_text = f"last capture {_ago(age)} ({timeutil.iso(at)})"
-            if enabled and age > STALE_AFTER_S:
+            if enabled and age >= STALE_AFTER_S:
                 warns.append("status-line capture older than 15 minutes")
         elif enabled:
             warns.append("status-line backup is on but nothing was captured")

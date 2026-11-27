@@ -144,5 +144,14 @@ class FingerprintTests(unittest.TestCase):
             identity.observe(identity.new_anchor(), datetime(2026, 11, 30, 1, 0), {})
 
 
+class ForeignMatch(unittest.TestCase):
+    def test_names_the_account_whose_minute_matches(self):
+        """RULING 31: the gate records which account a foreign reset belongs to."""
+        others = {"~/b": mow(moment(600)), "~/a": mow(moment())}
+        self.assertEqual(identity.foreign_match(moment(), others), "~/a")
+        self.assertIsNone(identity.foreign_match(moment(3000), others))
+        self.assertIsNone(identity.foreign_match(None, others))
+
+
 if __name__ == "__main__":
     unittest.main()

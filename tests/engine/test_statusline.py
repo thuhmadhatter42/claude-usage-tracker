@@ -166,7 +166,7 @@ class OnOffTests(Base):
         self.assertEqual(cur["statusLine"]["padding"], 2)
         self.assertEqual(cur["statusLine"]["command"], wrapped)
         self.assertIn("jusage-statusline", wrapped)
-        self.assertTrue(wrapped.startswith(f"{self.python} -E -s "))
+        self.assertTrue(wrapped.startswith(f"{self.python} -B -E -s "))     # RULINGS 51: -B, no .pyc
         rec = ConfigStore.load(self.state).statusline[self.key]
         self.assertEqual(rec["original"], ORIGINAL)
         self.assertTrue(rec["enabled"])
@@ -175,6 +175,27 @@ class OnOffTests(Base):
         self.assertEqual(json.loads(self.settings().read_text()), before)
         self.assertEqual(json.loads(self.settings().read_text())["statusLine"]["command"], ORIGINAL)
         self.assertFalse(ConfigStore.load(self.state).statusline[self.key]["enabled"])
+
+    def test_on_refuses_a_settings_file_it_would_reformat(self):
+        """Review-security 6: only the statusLine key may change. A file jusage cannot write back
+        byte for byte (tabs, compact separators, escapes, a duplicate key) is refused, untouched."""
+        layouts = {
+            "tabs": '{\n\t"theme": "dark",\n\t"statusLine": "x"\n}\n',
+            "compact": '{"theme":"dark","statusLine":"x"}\n',
+            "escape": '{\n  "theme": "caf\\u00e9",\n  "statusLine": "x"\n}\n',
+            "duplicate": '{\n  "theme": "dark",\n  "theme": "light",\n  "statusLine": "x"\n}\n',
+        }
+        for why, raw in layouts.items():
+            with self.subTest(why):
+                folder = self.th.home / f".claude-{why}"
+                folder.mkdir()
+                key = accounts.folder_key(folder)
+                p = self.write_settings(None, folder=folder, raw=raw)
+                with self.assertRaises(statusline.StatuslineRefused) as cm:
+                    self.on(key)
+                self.assertIn("formatting", str(cm.exception.reason))
+                self.assertEqual(p.read_text(encoding="utf-8"), raw)
+                self.assertNotIn(key, ConfigStore.load(self.state).statusline)
 
     def test_string_shaped_statusline_restored_as_string(self):
         self.write_settings({"statusLine": ORIGINAL})
@@ -226,7 +247,7 @@ class OnOffTests(Base):
         self.assertIn("jusage-statusline", json.loads(real.read_text())["statusLine"]["command"])
 
     def test_indent_and_trailing_newline_kept(self):
-        raw = '{\n    "a": 1,\n    "statusLine": {"type": "command", "command": "echo hi"}\n}\n'
+        raw = '{\n    "a": 1,\n    "statusLine": {\n        "type": "command",\n        "command": "echo hi"\n    }\n}\n'
         self.write_settings(None, raw=raw)
         self.on()
         text = self.settings().read_text()
@@ -370,6 +391,23 @@ class BackupTests(Base):
         r, why = statusline.backup_reading(acc, self.capture_doc(), {}, NOW, key=self.key)
         self.assertIsNone(r)
         self.assertIn("service", why)
+
+    def test_primary_capture_accepted_while_the_service_is_healthy(self):
+        """RULING 28: with the backup on, an accepted capture is the reading even when the service is fine;
+        every identity check still applies."""
+        acc = AccountLive(fetched=NOW - timedelta(minutes=5), data={"x": 1}, reset_anchor=self.failing().reset_anchor,
+                          identity_uuid="u-1")
+        r, why = statusline.backup_reading(acc, self.capture_doc(), {}, NOW, key=self.key, primary=True)
+        self.assertIsNotNone(r, why)
+        self.assertEqual(r.source, "statusline")
+        mine = timeutil.minute_of_week(WEEK_RESET)
+        r, why = statusline.backup_reading(acc, self.capture_doc(), {"/other": mine}, NOW, key=self.key, primary=True)
+        self.assertIsNotNone(r, "own learned minute wins")
+        odd = WEEK_RESET + timedelta(hours=7)
+        r, why = statusline.backup_reading(acc, self.capture_doc(week_reset=odd), {}, NOW, key=self.key, primary=True)
+        self.assertIsNone(r)
+        r, why = statusline.backup_reading(acc, self.capture_doc(folder="/elsewhere"), {}, NOW, key=self.key, primary=True)
+        self.assertIsNone(r)
 
     def test_foreign_reading_68772_ignored(self):
         mine = timeutil.minute_of_week(WEEK_RESET)

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// What the panel's views need from outside the Views folder, handed in by the host (S13/S16). The views never
 /// reach for a house-kit type or the engine directly, so they build and test on their own; the host wires:
-///   log           the house-kit log (`AppLog.shared` conforms to `HouseLog` with no extra code)
+///   log           the house-kit log (`AppLog.shared` conforms to `HostLog`, Host/HostLog.swift: one log protocol, RULINGS 45)
 ///   shortcuts     `QuickKeys.shared.shortcut(for:)` for every `QuickKeyID`, re-published when the user rebinds
 ///   refresh       `Scheduler.request(.manual)`
 ///   houseMenu     the same items, in the same order, as the status item's right-click menu (S12, R-169)
@@ -11,12 +11,6 @@ import SwiftUI
 ///   accentPicker  the house kit's `AccentPickerRow()`
 ///   glow          the house kit's glow modifier (lit = true)
 ///   foldAnimationDone  `PanelController.replaceIfShown()` (R-64)
-
-/// The house-kit log as the views use it. Every view-level failure goes through here (a feed that would not
-/// decode, a setting the engine refused).
-protocol HouseLog {
-    func error(_ category: String, _ message: String)
-}
 
 /// Quick Keys row ids the panel uses. W3-C's `QuickKeyTable.swift` defines refresh, dashboard, previousMonth and
 /// nextMonth; settings, quit and quickKeys are the kit's standard rows.
@@ -55,7 +49,7 @@ typealias EngineCommand = ([String]) async -> RunResult
 final class PanelServices: ObservableObject {
     /// Quick Keys id -> its current chord (nil = the user cleared it).
     @Published var shortcuts: [String: KeyboardShortcut]
-    let log: HouseLog
+    let log: HostLog
     let refresh: () -> Void
     let openDashboard: (String) -> Void
     let houseMenu: [PanelMenuItem]
@@ -66,7 +60,7 @@ final class PanelServices: ObservableObject {
     let quit: () -> Void
     let foldAnimationDone: () -> Void
 
-    init(shortcuts: [String: KeyboardShortcut], log: HouseLog, refresh: @escaping () -> Void,
+    init(shortcuts: [String: KeyboardShortcut], log: HostLog, refresh: @escaping () -> Void,
          openDashboard: @escaping (String) -> Void, houseMenu: [PanelMenuItem], engine: @escaping EngineCommand,
          loginItem: LoginItemControl, accentPicker: @escaping () -> AnyView,
          glow: @escaping (AnyView, Bool) -> AnyView, quit: @escaping () -> Void,

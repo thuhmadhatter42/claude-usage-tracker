@@ -49,16 +49,13 @@ class Sections(unittest.TestCase):
         self.assertNotIn("40%", h)
 
     def test_legacy_group_wording(self):
-        sp = {"period_start": at(days=-3), "parts": [{"user": "Old", "install_id": "e5f6", "usd": 1.0, "share": 1.0}]}
-        old = report(user="Old", install_id="e5f6", legacy=True,
-                     live={"old@example.com": {"meters": [meter(split=sp)]}},
-                     accounts=["old@example.com"])
+        old = report(user="Old", install_id="e5f6", legacy=True)
         h = sections.plan_meters(build([old]))
         self.assertIn("not reported yet (update jusage)", h)
         self.assertNotIn("Old 100%", h)                    # no split for a legacy group
 
     def test_top7_plus_other(self):
-        projects = {f"p{i}": {"tokens": 1000 - i, "cost": 0.1} for i in range(9)}
+        projects = {f"p{i}": {"tokens": 1000 - i, "usd": 0.1} for i in range(9)}
         m = build([report(days={NOW.date().isoformat(): day(projects=projects)})])
         proj = next(c for c in m.charts if c["cid"] == "proj")
         labels = [lab for _, lab in proj["series"]]
@@ -66,7 +63,7 @@ class Sections(unittest.TestCase):
 
     def test_model_legend_7d(self):
         old_model = {"claude-sonnet-4-5-20250929": {"input": 1, "cache_5m": 0, "cache_1h": 0, "cache_read": 0,
-                                                     "output": 9, "tokens": 999999, "calls": 1, "cost": 9.0}}
+                                                     "output": 9, "tokens": 999999, "calls": 1, "usd": 9.0, "unpriced": 0}}
         reps = [report(days={NOW.date().isoformat(): day(), days_ago(20): day(models=old_model)})]
         m = build(reps)
         model = next(c for c in m.charts if c["cid"] == "model")

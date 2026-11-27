@@ -100,7 +100,8 @@ class PaceRules(unittest.TestCase):
         m = meter(40, 9000, 18000)
         old = NOW - timedelta(seconds=901)
         self.assertIsNone(pace.pace(m, NOW, read_at=old).state)
-        self.assertEqual(pace.pace(m, NOW, read_at=NOW - timedelta(seconds=900)).state, "green")
+        self.assertIsNone(pace.pace(m, NOW, read_at=NOW - timedelta(seconds=900)).state)    # RULING 33: >= 900 s
+        self.assertEqual(pace.pace(m, NOW, read_at=NOW - timedelta(seconds=899)).state, "green")
 
     def test_words(self):
         self.assertEqual(run(30, 9000).words, "On pace: about 60% by the reset.")

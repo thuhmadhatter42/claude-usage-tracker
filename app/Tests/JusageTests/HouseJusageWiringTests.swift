@@ -40,6 +40,31 @@ final class HouseJusageWiringTests: XCTestCase {
         QuickKeys.shared.windowOpen = false
     }
 
+    /// The sheets hang off the panel window, so a right-click item must show the panel BEFORE it opens its sheet.
+    func testSheetItemsShowThePanelBeforeOpeningTheirSheet() {
+        var order: [String] = []
+        let items = JusageHouseMenu.items(updater: AppUpdater(), quit: {}, presentSheet: { open in
+            order.append("panel"); open()
+        })
+        func fire(_ t: String) { let i = items.first { $0.title == t }!; _ = i.target!.perform(i.action!, with: i) }
+        let savedChecks = HouseDoctor.appChecks; HouseDoctor.appChecks = []
+        defer {
+            HouseDoctor.appChecks = savedChecks
+            UninstallCenter.shared.showing = false; ReportCenter.shared.showing = false
+            DoctorCenter.shared.showing = false; QuickKeys.shared.windowOpen = false
+        }
+        for t in ["Quick Keys", "Send Report…", "Run Doctor", "Uninstall jusage…"] {
+            order = []
+            UninstallCenter.shared.showing = false; ReportCenter.shared.showing = false
+            DoctorCenter.shared.showing = false; QuickKeys.shared.windowOpen = false
+            fire(t)
+            XCTAssertEqual(order, ["panel"], "\(t) must present the panel first")
+        }
+        order = []
+        fire("Jusage Manual".replacingOccurrences(of: "J", with: "j"))
+        XCTAssertEqual(order, [], "items that open their own window do not need the panel")
+    }
+
     func testQuickKeysItemCarriesItsChordFromTheTable() {
         let item = JusageHouseMenu.items(updater: AppUpdater(), quit: {}).first { $0.title == "Quick Keys" }!
         XCTAssertEqual(item.identifier?.rawValue, "qk.quickKeys")

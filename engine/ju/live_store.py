@@ -14,13 +14,13 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from dataclasses import asdict, dataclass, field, fields
-from datetime import datetime, timedelta
+from dataclasses import asdict, dataclass, field, fields, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence, Union
 
 from .constants import LIVE_SCHEMA, STALE_AFTER_S
-from .contracts import ERROR_KINDS, BringUpRefused, Reading
+from .contracts import ERROR_KINDS, BringUpRefused, Reading, ReplyChanged
 from .timeutil import iso, parse_iso
 
 FILE_NAME = "live.json"
@@ -38,10 +38,13 @@ class ErrorInfo:
     kind: str                     # one of contracts.ERROR_KINDS
     text: str
     at: datetime
+    other: Optional[str] = None   # identity_foreign_reset only: the folder key whose reset matched (R-14)
 
     def __post_init__(self):
         if self.kind not in ERROR_KINDS:
             raise ValueError(f"unknown error kind {self.kind!r}")
+        if self.other is not None and (self.kind != "identity_foreign_reset" or not isinstance(self.other, str)):
+            raise ValueError("only an identity_foreign_reset error names another account")
 
 
 @dataclass(frozen=True)
@@ -62,12 +65,12 @@ class AccountLive:
 
     def is_stale(self, now: datetime) -> bool:
         """A number exists but cannot be trusted as current: the last attempt failed, or the
-        reading is older than STALE_AFTER_S. No data at all is an error, not a stale number."""
+        reading is STALE_AFTER_S old or more. No data at all is an error, not a stale number."""
         if self.data is None:
             return False
         if self.error is not None:
             return True
-        return self.fetched is None or (now - self.fetched).total_seconds() > STALE_AFTER_S
+        return self.fetched is None or (now - self.fetched).total_seconds() >= STALE_AFTER_S
 
 
 @dataclass
@@ -90,6 +93,7 @@ class StoreIO:
     read_json: Callable[[Path], dict]                 # E3: raises corrupt_error on bad JSON / non-object
     corrupt_error: type                               # E3: CorruptFile
     log: Callable[..., None]                          # E2: log(level, msg, **kv), never raises
+    check_reply: Callable[[dict], object]             # E11 parse: raises ReplyChanged on a reply it refuses
 
 
 class _BadShape(ValueError):
@@ -167,18 +171,44 @@ class LiveStore:
                 self.io.log("warn", "live.json migration: unreadable legacy entry; dropped", entry=name,
                             reason=str(e))
                 continue
+            if acc.data is not None:
+                try:
+                    self.io.check_reply(acc.data)
+                except ReplyChanged:
+                    # 0.1.x stored any reply it got; one 0.2.0 refuses would crash every later parse
+                    self.io.log("warn", "live.json migration: stored reply no longer parses; kept without data",
+                                entry=name)
+                    acc = replace(acc, data=None)
             live.put(key, acc)
         return live
 
 
+METER_LOG_KEEP_DAYS = 35      # read back: the weekly period (session share) and the newest service row
+
+
+def ts_floor(at: datetime) -> str:
+    """A text lower bound for meter_log `ts`, safe to compare in SQL. `ts` keeps the offset it was
+    written with, so text order is local wall-clock order; a bound one day earlier than `at` (in
+    UTC, no offset) is below every row at or after `at`, whatever its offset. Callers filter the
+    exact instant in Python; this only keeps SQL from handing back the whole history."""
+    return (at.astimezone(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def log_meters(conn: sqlite3.Connection, key: str, reading: Reading) -> None:
     """One meter_log row per meter of a successful reading (R-35). resets_at is rounded to the
-    minute: the service's reset time drifts sub-second, and readings of one period must match."""
+    minute: the service's reset time drifts sub-second, and readings of one period must match.
+    `ts` is whole seconds, so a status-line capture and a service read can share one: the service
+    row is kept either way (the per-model age, RULING 29, is measured from it). Rows older than
+    METER_LOG_KEEP_DAYS are pruned here, so the table never grows with history."""
     ts = iso(reading.fetched)
     conn.executemany(
-        "INSERT INTO meter_log (ts, account, meter, pct, resets_at, source) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO meter_log (ts, account, meter, pct, resets_at, source) VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (ts, account, meter) DO UPDATE SET pct = excluded.pct, resets_at = excluded.resets_at, "
+        "source = excluded.source WHERE excluded.source = 'service'",
         [(ts, key, m.id, float(m.pct), iso(_round_minute(m.resets_at)) if m.resets_at else None, reading.source)
          for m in reading.meters])
+    conn.execute("DELETE FROM meter_log WHERE ts < ?",
+                 (ts_floor(reading.fetched - timedelta(days=METER_LOG_KEEP_DAYS)),))
     conn.commit()
 
 
@@ -211,6 +241,8 @@ def _acc_to_json(a: AccountLive) -> dict:
     d = asdict(a)
     d["fetched"], d["blocked_until"], d["last_manual"] = _t(a.fetched), _t(a.blocked_until), _t(a.last_manual)
     d["error"] = None if a.error is None else {"kind": a.error.kind, "text": a.error.text, "at": iso(a.error.at)}
+    if a.error is not None and a.error.other is not None:
+        d["error"]["other"] = a.error.other
     return d
 
 
@@ -248,9 +280,12 @@ def _acc_from_json(v) -> AccountLive:
             raise _BadShape(f"reset_anchor.{k} {anchor[k]!r}")
     err = v["error"]
     if err is not None:
-        if not isinstance(err, dict) or set(err) != {"kind", "text", "at"} or not isinstance(err["text"], str):
+        if not isinstance(err, dict) or set(err) - {"other"} != {"kind", "text", "at"} or not isinstance(err["text"], str):
             raise _BadShape("error fields")
-        err = ErrorInfo(err["kind"], err["text"], parse_iso(err["at"]))
+        try:
+            err = ErrorInfo(err["kind"], err["text"], parse_iso(err["at"]), err.get("other"))
+        except ValueError as e:
+            raise _BadShape(f"error: {e}") from None
     return AccountLive(fetched=_time(v["fetched"]), data=v["data"], error=err, warning=v["warning"],
                        source=v["source"], blocked_until=_time(v["blocked_until"]),
                        backoff_step=v["backoff_step"], retry_after_explicit=v["retry_after_explicit"],

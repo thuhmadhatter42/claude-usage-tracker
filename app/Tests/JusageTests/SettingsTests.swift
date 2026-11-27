@@ -58,10 +58,27 @@ final class SettingsTests: XCTestCase {
         XCTAssertTrue(json["notificationLatch"] is [String: Any])
     }
 
-    func testUnreadableRecordGivesDefaults() {
+    func testUnreadableRecordIsNeverSilentlyReset() throws {
         let d = suite()
-        d.set(Data("garbage".utf8), forKey: SettingsStore.key)
-        XCTAssertEqual(SettingsStore(defaults: d).settings, AppSettings())
+        // A record a later build wrote: an unknown menu bar mode, with a recorded Python and a latch inside it.
+        let damaged = Data(#"{"menuBarMode":"meter:","pythonPath":"/opt/homebrew/bin/python3","theme":"mono"}"#.utf8)
+        d.set(damaged, forKey: SettingsStore.key)
+        let store = SettingsStore(defaults: d)
+        XCTAssertNotNil(store.loadProblem, "the damage is reported, not swallowed")
+        XCTAssertEqual(d.data(forKey: SettingsStore.key), damaged, "the stored record is left exactly as it was")
+        let copies = d.dictionaryRepresentation().filter { $0.key.hasPrefix(SettingsStore.corruptKeyPrefix) }
+        XCTAssertEqual(copies.count, 1, "a copy is kept")
+        XCTAssertEqual(copies.first?.value as? Data, damaged)
+        // A write from the panel must not overwrite what the user can still recover.
+        store.update { $0.theme = "other" }
+        XCTAssertEqual(d.data(forKey: SettingsStore.key), damaged)
+    }
+
+    func testReadableRecordHasNoProblem() throws {
+        let d = suite()
+        d.set(try JSONEncoder().encode(AppSettings()), forKey: SettingsStore.key)
+        XCTAssertNil(SettingsStore(defaults: d).loadProblem)
+        XCTAssertNil(SettingsStore(defaults: suite()).loadProblem, "no record at all is a first run, not damage")
     }
 
     func testRecordMissingKeysStillLoads() throws {

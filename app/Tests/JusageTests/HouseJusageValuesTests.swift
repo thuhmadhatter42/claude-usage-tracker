@@ -34,6 +34,9 @@ final class HouseJusageValuesTests: XCTestCase {
         XCTAssertEqual(keys.def("settings")?.kind, .locked)
         XCTAssertEqual(keys.def("quit")?.kind, .locked)
         XCTAssertEqual(QuickKeys.appRows.map(\.id), ["refresh", "dashboard", "previousMonth", "nextMonth"], "the standard rows are not repeated")
+        XCTAssertEqual(QuickKeys.appRows.map(\.id),
+                       [QuickKeyID.refresh, QuickKeyID.dashboard, QuickKeyID.previousMonth, QuickKeyID.nextMonth],
+                       "the panel binds the same row ids the table defines (RULINGS 48c)")
     }
 
     // MARK: Tips

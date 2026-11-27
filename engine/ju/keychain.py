@@ -103,7 +103,7 @@ def candidate_services(folder_key: str, hints: Optional[Spellings], env: Mapping
     return out
 
 
-def _legacy_allowed(folder_key: str, hints: Optional[Spellings], env: Mapping[str, str]) -> bool:
+def legacy_allowed(folder_key: str, hints: Optional[Spellings], env: Mapping[str, str]) -> bool:
     """R-10: only the default folder, and only when no securestorage / config-dir value
     (remembered or in this environment) applies to it. (The "no hashed login is ok" half is
     checked by the caller, which has just probed them.)"""
@@ -219,7 +219,7 @@ def find_login(folder_key: str, hints: Optional[Spellings], env: Mapping[str, st
         if r.status == "ok":
             return _checked(r.login)
         results.append(r)
-    if _legacy_allowed(folder_key, hints, env):
+    if legacy_allowed(folder_key, hints, env):
         r = probe(LEGACY_SERVICE)
         if r.status == "ok":
             return _checked(replace(r.login, legacy=True))

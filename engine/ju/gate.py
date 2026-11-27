@@ -7,7 +7,8 @@ Rules (R-17…R-20 with J's cadence amendment), all in the pure functions below:
   due        after `read_every_s` (15–600) since the last success; at once when a reset has passed
              since the reading was taken; never before `blocked_until`. Manual skips the cadence
              and a guessed block, never an explicit Retry-After, and is floored at 15 s.
-  on_429     Retry-After > 0 → exactly that, capped at 3600 s (explicit); absent/0 → the ladder.
+  on_429     Retry-After > 0 → the longest of it (capped at 3600 s), the ladder step and read_every_s,
+             explicit, the step climbing; absent/0 → the ladder.
   on_failure every other failure → the ladder (guessed). A failure never brings the next try sooner.
   ladder     300, 600, 1200, 1800 s (cap), each +0–20 % jitter; success clears it.
 
@@ -24,10 +25,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .constants import (BACKOFF_S, JITTER, MANUAL_FLOOR_S, READ_EVERY_MAX, READ_EVERY_MIN, RETRY_AFTER_CAP_S)
+from .constants import (BACKOFF_S, JITTER, MANUAL_FLOOR_S, READ_EVERY_MAX, READ_EVERY_MIN, RETRY_AFTER_CAP_S,
+                        SERVICE_REFRESH_S)
 from .contracts import (ERROR_KINDS, GateDecision, JusageError, Login, LoginError, Meter, RateLimited, Reading)
 from .live_store import AccountLive, ErrorInfo, Live, LiveStore, log_meters
-from .timeutil import minute_of_week
+from . import identity
+from .timeutil import minute_of_week, parse_iso
 
 LOCK_NAME = "fetch.lock"
 LOCK_TIMEOUT_S = 120
@@ -35,6 +38,7 @@ LOCK_POLL_S = 0.05
 STUCK = "another jusage refresh is stuck"
 RATE_LIMITED_TEXT = "Anthropic is rate-limiting usage reads"
 IDENTITY_CHANGED_TEXT = "Account changed mid-read; reading discarded"
+LEGACY_UNVERIFIED_TEXT = "Reading from the old shared Keychain login discarded: it can't be matched to this account"
 
 
 @dataclass(frozen=True)
@@ -80,10 +84,15 @@ class RefreshResult:
 
 # ------------------------------------------------------------------ pure rules
 
+_CAPTURED = ("session", "weekly")      # the meters a status-line capture carries
+
+
 def due(acc: AccountLive, read_every_s: int, now: datetime, manual: bool,
-        meters: Sequence[Meter]) -> GateDecision:
+        meters: Sequence[Meter], service_at: Optional[datetime] = None) -> GateDecision:
     """May this folder be read now? `meters` = the parsed meters of `acc.data` (empty if none).
-    next_at = the earliest moment it becomes due (None when due now)."""
+    next_at = the earliest moment it becomes due (None when due now). `service_at` = the newest
+    usage-service reading in meter_log: a stored status-line reading (RULING 28) carrying per-model
+    meters is due once that is SERVICE_REFRESH_S old (RULING 29), so those never grey."""
     if not READ_EVERY_MIN <= read_every_s <= READ_EVERY_MAX:
         raise ValueError(f"read_every_s {read_every_s} outside {READ_EVERY_MIN}-{READ_EVERY_MAX}")
     blocked = acc.blocked_until is not None and now < acc.blocked_until
@@ -102,7 +111,14 @@ def due(acc: AccountLive, read_every_s: int, now: datetime, manual: bool,
     cadence_at = acc.fetched + timedelta(seconds=read_every_s)
     if now >= cadence_at:
         return GateDecision(True, "cadence", None)
-    nxt = min([cadence_at] + resets[:1])
+    service_due = []
+    if acc.source == "statusline" and any(m.id not in _CAPTURED for m in meters):
+        if service_at is None:
+            return GateDecision(True, "per_model", None)
+        service_due = [service_at + timedelta(seconds=SERVICE_REFRESH_S)]
+        if now >= service_due[0]:
+            return GateDecision(True, "per_model", None)
+    nxt = min([cadence_at] + resets[:1] + service_due)
     if acc.blocked_until is not None:
         nxt = max(nxt, acc.blocked_until)
     return GateDecision(False, "cadence", nxt)
@@ -115,23 +131,31 @@ def on_success(acc: AccountLive, *, data: dict, uuid: Optional[str], warning: Op
                    identity_uuid=uuid)
 
 
-def on_429(acc: AccountLive, retry_after: Optional[int], now: datetime, rand: Callable[[], float]) -> AccountLive:
+def on_429(acc: AccountLive, retry_after: Optional[int], now: datetime, rand: Callable[[], float],
+           read_every_s: int) -> AccountLive:
+    """A Retry-After only ever lengthens the wait (R-17 within R-18): the block is the longest of
+    the Retry-After (capped), the ladder step and `read_every_s`, and the step climbs either way, so
+    a service answering every call with a short Retry-After is still read less and less often."""
     err = ErrorInfo("rate_limited", RATE_LIMITED_TEXT, now)
     if retry_after:
-        until = now + timedelta(seconds=min(int(retry_after), RETRY_AFTER_CAP_S))
-        return _block(acc, err, until, explicit=True, step=acc.backoff_step)
+        wait = max(min(int(retry_after), RETRY_AFTER_CAP_S), _ladder_wait(acc, rand), read_every_s)
+        return _block(acc, err, now + timedelta(seconds=wait), explicit=True, step=acc.backoff_step + 1)
     return _ladder(acc, err, now, rand)
 
 
-def on_failure(acc: AccountLive, kind: str, text: str, now: datetime, rand: Callable[[], float]) -> AccountLive:
+def on_failure(acc: AccountLive, kind: str, text: str, now: datetime, rand: Callable[[], float],
+               other: Optional[str] = None) -> AccountLive:
     if kind not in ERROR_KINDS or kind == "rate_limited":
         raise ValueError(f"on_failure takes a non-429 error kind, got {kind!r}")
-    return _ladder(acc, ErrorInfo(kind, text, now), now, rand)
+    return _ladder(acc, ErrorInfo(kind, text, now, other), now, rand)
+
+
+def _ladder_wait(acc: AccountLive, rand: Callable[[], float]) -> float:
+    return BACKOFF_S[min(acc.backoff_step, len(BACKOFF_S) - 1)] * (1 + JITTER * rand())
 
 
 def _ladder(acc: AccountLive, err: ErrorInfo, now: datetime, rand: Callable[[], float]) -> AccountLive:
-    base = BACKOFF_S[min(acc.backoff_step, len(BACKOFF_S) - 1)]
-    until = now + timedelta(seconds=base * (1 + JITTER * rand()))
+    until = now + timedelta(seconds=_ladder_wait(acc, rand))
     return _block(acc, err, until, explicit=False, step=acc.backoff_step + 1)
 
 
@@ -148,14 +172,14 @@ def _block(acc: AccountLive, err: ErrorInfo, until: datetime, *, explicit: bool,
 def refresh(state: Path, accounts: Sequence[str], *, manual: bool, deps: GateDeps) -> RefreshResult:
     """Read every due account through the lock and store the outcome. `accounts` = config folder
     keys in display order (E5). One account's failure is stored as its error, never raised."""
-    fd = _lock(Path(state))
+    fd = fetch_lock(Path(state))
     try:
         return _refresh_locked(Path(state), list(accounts), manual, deps)
     finally:
         os.close(fd)              # closing the descriptor releases the flock
 
 
-def _lock(state: Path) -> int:
+def fetch_lock(state: Path) -> int:
     fd = os.open(state / LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o600)
     deadline = time.monotonic() + LOCK_TIMEOUT_S
     while True:
@@ -173,50 +197,61 @@ def _refresh_locked(state: Path, accounts: List[str], manual: bool, deps: GateDe
     live = deps.store.load(state, accounts)
     groups = _group(accounts, {k: deps.read_uuid(k) for k in accounts})
     fetched: List[str] = []
+    changed = False
     conn = None
     try:
         for _, members, _ in groups:
             cur = _current_key(live, members)
             acc = live.account(cur)
             now = deps.now()
-            if not due(acc, deps.read_every_s, now, manual, _meters(acc, deps)).due:
+            if conn is None and acc.source == "statusline":
+                conn = deps.open_db(state)
+            if not due(acc, deps.read_every_s, now, manual, _meters(acc, deps), _service_at(conn, members)).due:
                 continue
-            others = {}
+            others, unlearned = {}, False
             for _, other, _ in groups:
                 if other is not members:
                     ok = _current_key(live, other)
                     if live.account(ok).reset_anchor["minute_of_week"] is not None:
                         others[ok] = live.account(ok).reset_anchor["minute_of_week"]
+                    else:
+                        unlearned = True
             if manual:
                 acc = replace(acc, last_manual=now)
-            reader, acc, reading = _read_group(members, acc, others, now, deps)
+            reader, acc, reading = _read_group(members, acc, others, now, deps, unlearned_others=unlearned)
             key = reader if reader is not None else cur
             live.put(key, acc)
+            changed = True                      # a failure with no reader is saved too: its ladder grows
             if reader is not None:
                 fetched.append(reader)
             if reading is not None:
                 if conn is None:
                     conn = deps.open_db(state)
                 log_meters(conn, reader, reading)
-        if fetched:
-            deps.store.save(state, live)
     finally:
-        if conn is not None:
-            conn.close()
+        # saved even when something below a fetch raises: a Retry-After or a reading already taken
+        # must never be lost and asked for again (a lost block is a call storm)
+        try:
+            if changed:
+                deps.store.save(state, live)
+        finally:
+            if conn is not None:
+                conn.close()
     blocks = []
     for _, members, uuid in groups:
         cur = _current_key(live, members)
         blocks.append(AccountBlock(cur, members, uuid, live.account(cur)))
     return RefreshResult(live=live, accounts=blocks, fetched=fetched,
-                         next_due=_next_due(live, groups, deps))
+                         next_due=_next_due(state, live, groups, deps))
 
 
 def _read_group(members: List[str], acc: AccountLive, others: Dict[str, int], now: datetime,
-                deps: GateDeps) -> Tuple[Optional[str], AccountLive, Optional[Reading]]:
+                deps: GateDeps, *, unlearned_others: bool) -> Tuple[Optional[str], AccountLive, Optional[Reading]]:
     """The group's reader is the first member, in order, whose find_login succeeds; then uuid
     before → fetch → parse → uuid after → fingerprint. Returns (reader or None when no member has
     a login, the updated entry, the accepted reading or None). No login anywhere → the first
-    member's LoginError is the group's error."""
+    member's LoginError is the group's error. `unlearned_others`: some other account on this Mac
+    has no learned weekly minute yet (a legacy-item reading cannot be told apart from it)."""
     first_err: Optional[LoginError] = None
     folder = login = None
     for m in members:
@@ -239,18 +274,28 @@ def _read_group(members: List[str], acc: AccountLive, others: Dict[str, int], no
         deps.check_stable(before, after)
         anchor = acc.reset_anchor
         weekly = next((m.resets_at for m in parsed.meters if m.id == "weekly" and m.resets_at), None)
+        if weekly is not None and login.legacy and not _legacy_checks_out(acc.reset_anchor, weekly, others,
+                                                                         unlearned_others):
+            deps.log("warn", "reading from the legacy Keychain item discarded: weekly reset unverified",
+                     folder=folder, minute_of_week=minute_of_week(weekly))
+            return reader, on_failure(acc, "identity_foreign_reset", LEGACY_UNVERIFIED_TEXT, now, deps.rand,
+                                      other=identity.foreign_match(weekly, others)), None
         if weekly is not None:
-            anchor, verdict = deps.observe(acc.reset_anchor, weekly, others)
+            # A hashed item is bound to its folder and the uuid check passed, so another account's
+            # minute proves nothing: the reading counts toward relearning (two accounts may share a
+            # reset). The foreign check guards only what names no account: the legacy item.
+            anchor, verdict = deps.observe(acc.reset_anchor, weekly, others if login.legacy else {})
             if verdict == "reject_foreign":
                 deps.log("warn", "reading rejected: weekly reset matches another account", folder=folder,
                          minute_of_week=minute_of_week(weekly))
                 return reader, on_failure(replace(acc, reset_anchor=anchor), "identity_foreign_reset",
-                                          "This reading matches another account's reset", now, deps.rand), None
+                                          "This reading matches another account's reset", now, deps.rand,
+                                          other=identity.foreign_match(weekly, others)), None
             if verdict != "accept":
                 raise ValueError(f"fingerprint verdict {verdict!r}")
     except RateLimited as e:
         deps.log("warn", "usage read rate-limited", folder=folder, retry_after=e.retry_after_s)
-        return reader, on_429(acc, e.retry_after_s, now, deps.rand), None
+        return reader, on_429(acc, e.retry_after_s, now, deps.rand, deps.read_every_s), None
     except JusageError as e:
         deps.log("warn", "usage read failed", folder=folder, kind=e.kind)
         text = IDENTITY_CHANGED_TEXT if e.kind == "identity_changed" else getattr(e, "text", None) or str(e)
@@ -258,6 +303,16 @@ def _read_group(members: List[str], acc: AccountLive, others: Dict[str, int], no
     new = on_success(acc, data=reply, uuid=after, warning=deps.login_warning(login), anchor=anchor, now=now)
     return reader, new, Reading(folder=folder, fetched=now, meters=list(parsed.meters), flags=list(parsed.flags),
                         uuid=after, source="service")
+
+
+def _legacy_checks_out(anchor: dict, weekly: datetime, others: Dict[str, int], unlearned_others: bool) -> bool:
+    """R-10: the unsuffixed item names no account, so its reading must pass the fingerprint on
+    what the engine already knows, never by reading the token. A learned minute must match. With
+    none learned, the reading is taken (and starts learning) only when it cannot be another
+    account's: every other account's minute is known and it matches none of them."""
+    if anchor.get("minute_of_week") is not None:
+        return identity.matches_own(anchor, weekly)
+    return not unlearned_others and identity.foreign_match(weekly, others) is None
 
 
 def _group(accounts: List[str], uuids: Dict[str, Optional[str]]) -> List[Tuple[str, List[str], Optional[str]]]:
@@ -292,13 +347,32 @@ def _meters(acc: AccountLive, deps: GateDeps) -> List[Meter]:
     return list(deps.parse(acc.data).meters) if acc.data is not None else []
 
 
-def _next_due(live: Live, groups, deps: GateDeps) -> datetime:
+def _service_at(conn, members: List[str]) -> Optional[datetime]:
+    """The newest usage-service reading of any member in meter_log (None without a connection: only a
+    status-line reading needs it, and only then is the database opened)."""
+    if conn is None:
+        return None
+    marks = ",".join("?" * len(members))
+    # the newest row by insertion (ts strings carry different offsets, so MAX(ts) would compare text)
+    row = conn.execute(f"SELECT ts FROM meter_log WHERE source = 'service' AND account IN ({marks}) "
+                       "ORDER BY rowid DESC LIMIT 1", list(members)).fetchone()
+    return parse_iso(row[0]) if row else None
+
+
+def _next_due(state: Path, live: Live, groups, deps: GateDeps) -> datetime:
     now = deps.now()
     if not groups:
         return now + timedelta(seconds=deps.read_every_s)
     times = []
-    for _, members, _ in groups:
-        acc = live.account(_current_key(live, members))
-        d = due(acc, deps.read_every_s, now, False, _meters(acc, deps))
-        times.append(now if d.due else d.next_at)
+    conn = None
+    try:
+        for _, members, _ in groups:
+            acc = live.account(_current_key(live, members))
+            if conn is None and acc.source == "statusline":
+                conn = deps.open_db(state)
+            d = due(acc, deps.read_every_s, now, False, _meters(acc, deps), _service_at(conn, members))
+            times.append(now if d.due else d.next_at)
+    finally:
+        if conn is not None:
+            conn.close()
     return min(times)

@@ -25,16 +25,34 @@ class Page(unittest.TestCase):
         return page.render([report()] if reps is None else reps, list(notes), "0.2.0", NOW, rules)
 
     def test_script_breakout_escaped(self):
-        projects = {EVIL: {"tokens": 500, "cost": 0.1}}
+        projects = {EVIL: {"tokens": 500, "usd": 0.1}}
         h = self.render([report(days={NOW.date().isoformat(): day(projects=projects)})])
         self.assertNotIn(EVIL, h)
         self.assertNotIn("<script>alert", h)
         tips = data_block(h)["tips"]["proj"]
         self.assertIn([EVIL, EVIL], tips["series"])
 
+    def test_strict_content_security_policy(self):
+        """Review-security 1c: the page needs no network, so nothing may load or send; only the
+        page's own inline scripts run (by hash), so an injected handler or script does nothing."""
+        import base64, hashlib
+        h = self.render()
+        m = re.search(r'<meta http-equiv="Content-Security-Policy" content="([^"]+)">', h)
+        self.assertIsNotNone(m, "no CSP meta")
+        self.assertLess(m.start(), h.index("<script"), "the CSP must come before the first script")
+        csp = dict((d.strip().split(" ", 1) + [""])[:2] for d in m.group(1).split(";") if d.strip())
+        self.assertEqual(csp["default-src"], "'none'")
+        self.assertNotIn("unsafe-inline", csp["script-src"])
+        self.assertEqual(csp["base-uri"], "'none'")
+        self.assertEqual(csp["form-action"], "'none'")
+        scripts = re.findall(r"<script>(.*?)</script>", h, re.S)
+        self.assertEqual(len(scripts), 3)
+        want = {"'sha256-%s'" % base64.b64encode(hashlib.sha256(x.encode("utf-8")).digest()).decode() for x in scripts}
+        self.assertEqual(set(csp["script-src"].split()), want)
+
     def test_no_percent_formatting(self):
         name = "100% {{css}} %s %%"
-        h = self.render([report(days={NOW.date().isoformat(): day(projects={name: {"tokens": 5, "cost": 0}})})])
+        h = self.render([report(days={NOW.date().isoformat(): day(projects={name: {"tokens": 5, "usd": 0}})})])
         self.assertIn("100% {{css}} %s %%", h)
         with self.assertRaises(KeyError):
             page.fill("<p>{{a}}{{b}}</p>", {"a": "x"})

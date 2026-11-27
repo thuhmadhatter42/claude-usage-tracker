@@ -25,6 +25,20 @@ final class FoldsTests: XCTestCase {
         XCTAssertEqual(people(f, s).map(\.id), ["c3d4"])
     }
 
+    func testPeerWithEmptyFoldersAndAcctKeyStillShowsItsAccounts() throws {
+        let f = try Fixture.feed { j in
+            var p = j["people"] as! [[String: Any]]
+            var accounts = p[0]["accounts"] as! [[String: Any]]
+            accounts[0]["key"] = "acct:11111111-2222-3333-4444-555555555555"
+            accounts[0]["folders"] = [String]()
+            p[0]["accounts"] = accounts
+            j["people"] = p
+        }
+        let accounts = people(f)[0].accounts
+        XCTAssertFalse(accounts.isEmpty)
+        XCTAssertEqual(accounts[0].id, "acct:11111111-2222-3333-4444-555555555555")
+    }
+
     func testPersonGreysAt15Minutes() throws {
         let fresh = people(try Fixture.feed(), now: Fixture.date("2026-11-26T21:52:59-08:00"))[0]
         XCTAssertFalse(fresh.stale)
@@ -90,13 +104,52 @@ final class FoldsTests: XCTestCase {
     func testOpenWindowsModelsProjects() throws {
         let f = try Fixture.feed { j in
             j["models"] = (0..<6).map { ["id": "m\($0)", "name": "m\($0)", "tokens": 100 - $0, "usd": 1.0] }
-            j["projects"] = (0..<7).map { ["name": "p\($0)", "share": 0.1, "tokens": 10] }
+            j["projects_today"] = (0..<7).map { ["name": "p\($0)", "share": 0.1, "tokens": 10] }
         }
         let t = ViewFixture.time()
         XCTAssertEqual(DetailModel.windows(feed: f, settings: AppSettings(), time: t).map(\.line), ["sam 19:00–Fri 00:00  6.2M · $21.40"])
-        XCTAssertEqual(DetailModel.models(feed: f).map(\.name), ["m0", "m1", "m2", "m3"])
+        XCTAssertEqual(DetailModel.models(feed: f, settings: AppSettings()).map(\.name), ["m0", "m1", "m2", "m3"])
         XCTAssertEqual(ProjectsModel.rows(feed: f).count, 5)
-        XCTAssertEqual(ProjectsModel.rows(feed: try Fixture.feed()).map(\.text), ["62%", "38%"])
+        XCTAssertEqual(ProjectsModel.rows(feed: try Fixture.feed()).map(\.text), ["75%", "25%"], "today's list, not the week's")
+    }
+
+    /// Review 8: "Busiest models" off hides only the models rows. The plan split and the windows stay, and the
+    /// fold itself stays while any of its parts is on.
+    func testBusiestModelsOffHidesOnlyTheModelsRows() throws {
+        let f = try Fixture.feed()
+        let t = ViewFixture.time()
+        var s = AppSettings()
+        s.hiddenSections = [.models]
+        XCTAssertTrue(DetailModel.models(feed: f, settings: s).isEmpty)
+        XCTAssertFalse(SplitModel.rows(feed: f, settings: s).isEmpty, "the plan split stays")
+        XCTAssertFalse(DetailModel.windows(feed: f, settings: s, time: t).isEmpty)
+        XCTAssertTrue(DetailModel.isShown(feed: f, settings: s, time: t))
+        // Everything in it off, and no split rows: no empty fold.
+        s.hiddenSections = [.models, .windows]
+        let noSplit = try ViewFixture.feed { a in
+            for i in a.indices {
+                var meters = a[i]["meters"] as! [[String: Any]]
+                for j in meters.indices { meters[j]["split"] = NSNull() }
+                a[i]["meters"] = meters
+            }
+        }
+        XCTAssertFalse(DetailModel.isShown(feed: noSplit, settings: s, time: t))
+        XCTAssertTrue(DetailModel.isShown(feed: f, settings: AppSettings(), time: t))
+    }
+
+    func testMetersAndWindowsSectionsGate() throws {
+        // RULINGS 48a / R-84: "Claude's meters" and "Open 5-hour windows" are Show toggles like the rest.
+        let f = try Fixture.feed()
+        var s = AppSettings()
+        let t = ViewFixture.time()
+        XCTAssertFalse(TodayModel.meterBlocks(feed: f, settings: s).isEmpty)
+        XCTAssertFalse(DetailModel.windows(feed: f, settings: s, time: t).isEmpty)
+        s.hiddenSections = [.meters, .windows]
+        XCTAssertTrue(TodayModel.meterBlocks(feed: f, settings: s).isEmpty)
+        XCTAssertTrue(DetailModel.windows(feed: f, settings: s, time: t).isEmpty)
+        XCTAssertEqual(SplitModel.rows(feed: f, settings: s), SplitModel.rows(feed: f, settings: AppSettings()),
+                       "the split rows do not follow the meters toggle")
+        XCTAssertEqual(Section.allCases, [.meters, .windows, .today, .people, .models, .projects])
     }
 
     func testFoldStateIsOpenFolds() {

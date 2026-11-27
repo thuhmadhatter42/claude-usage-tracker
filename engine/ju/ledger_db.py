@@ -6,11 +6,14 @@ A database written by a newer jusage is refused (DbTooNew), never opened read-wr
 is read, so two processes opening an old database at once migrate it exactly once."""
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import logging
 import os
 import sqlite3
+import time
 from pathlib import Path
-from typing import Callable, NamedTuple, Optional, Sequence
+from typing import Callable, Iterator, NamedTuple, Optional, Sequence
 
 from ju.constants import DB_BUSY_S, DB_SCHEMA
 from ju.contracts import JusageError
@@ -172,27 +175,58 @@ def open_db(state, folders: Sequence = (), log: Optional[Log] = None) -> sqlite3
     c.row_factory = sqlite3.Row
     try:
         c.execute(f"PRAGMA busy_timeout={DB_BUSY_S * 1000}")
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("BEGIN IMMEDIATE")        # the lock comes before the version is read
-        try:
-            version = c.execute("PRAGMA user_version").fetchone()[0]
-            has_records = c.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='records'").fetchone()
-            if version > DB_SCHEMA:
-                raise DbTooNew(version)
-            if not has_records:
-                for stmt in _SCHEMA.split(";"):
-                    if stmt.strip():
-                        c.execute(stmt)
-                c.execute(f"PRAGMA user_version={DB_SCHEMA}")
-            elif version < DB_SCHEMA:
-                _migrate(c, version, [str(f) for f in folders], log)
-            c.execute("COMMIT")
-        except BaseException:
-            if c.in_transaction:
-                c.execute("ROLLBACK")
-            raise
+        # SQLite answers "database is locked" at once, without waiting on busy_timeout, when two
+        # connections switch a rollback-journal file to WAL together. The switch and the ladder
+        # therefore run under one file lock, so openers queue instead of failing.
+        with _open_lock(Path(state)):
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("BEGIN IMMEDIATE")        # the lock comes before the version is read
+            try:
+                version = c.execute("PRAGMA user_version").fetchone()[0]
+                has_records = c.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='records'").fetchone()
+                if version > DB_SCHEMA:
+                    raise DbTooNew(version)
+                if not has_records:
+                    for stmt in _SCHEMA.split(";"):
+                        if stmt.strip():
+                            c.execute(stmt)
+                    c.execute(f"PRAGMA user_version={DB_SCHEMA}")
+                elif version < DB_SCHEMA:
+                    _migrate(c, version, [str(f) for f in folders], log)
+                c.execute("COMMIT")
+            except BaseException:
+                if c.in_transaction:
+                    c.execute("ROLLBACK")
+                raise
         return c
     except BaseException:
         c.close()
         raise
+
+
+class DbLocked(JusageError):
+    """Another jusage held usage.db's open lock for longer than DB_BUSY_S."""
+
+    def __init__(self):
+        super().__init__(f"usage.db is held by another jusage that is not finishing (waited {DB_BUSY_S} s)")
+
+
+@contextlib.contextmanager
+def _open_lock(state: Path) -> Iterator[None]:
+    """`<state>/usage.db.lock`, held exclusively across the journal-mode switch and the ladder."""
+    fd = os.open(state / (DB_NAME + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        deadline = time.monotonic() + DB_BUSY_S
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise DbLocked() from None
+                time.sleep(0.01)
+        yield
+    finally:
+        os.close(fd)        # closing the descriptor releases the lock

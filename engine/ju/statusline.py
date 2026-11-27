@@ -317,7 +317,7 @@ def _set_record(cfg, key: str, rec: dict) -> None:
 def _wrapped(python: str, engine_dir, original: Optional[str]) -> str:
     import shlex
     from pathlib import Path
-    head = f"{shlex.quote(python)} -E -s {shlex.quote(str(Path(engine_dir) / WRAPPER_NAME))} --"
+    head = f"{shlex.quote(python)} -B -E -s {shlex.quote(str(Path(engine_dir) / WRAPPER_NAME))} --"
     return head if original is None else f"{head} {shlex.quote(original)}"
 
 
@@ -351,6 +351,10 @@ def turn_on(state, folder: str, *, python: Optional[str] = None, engine_dir=None
             raise _refuse("statusline on: no usable Python is recorded; set it with `jusage config python <path>`")
         wrapped = _wrapped(py, engine_dir or constants.HERE.parent, current)
 
+        if s.raw is not None and s.dumps() != s.raw:
+            raise _refuse(f"statusline on: {s.path} has formatting jusage would change (tabs, compact "
+                          "separators, escaped characters or a repeated key); only the statusLine may "
+                          "change, so it is not touched. Re-save it with 2-space indents, then try again")
         after = _with_command(s.data, wrapped, shape)
         restored = _with_command(after, current, shape)
         if s.dumps(restored) != s.dumps():
@@ -444,17 +448,19 @@ def _near_minute(a: int, b: int) -> bool:
 
 
 def backup_reading(acc, cap: Optional[Mapping], others: Mapping[str, int], now: datetime,
-                   *, key: Optional[str] = None) -> Tuple[Optional["Reading"], str]:
+                   *, key: Optional[str] = None, primary: bool = False) -> Tuple[Optional["Reading"], str]:
     """The status-line capture as a Reading, or (None, reason).
 
-    Only while the service read is failing or gated; capture younger than 15 minutes; every
+    `primary` (RULING 28: the account's backup is on, so an accepted capture IS its reading) drops
+    the first condition; every other check stays. Otherwise only while the service read is failing
+    or gated. Capture younger than 15 minutes; every
     percentage 0..101; the capture's folder is this account's (`key`); and the weekly reset
     falls within 120 s of this account's LEARNED weekly reset. A reset matching another
     account's learned minute (`others`: folder key -> minute) is that account's data (#68772).
     Session and weekly only: the status line has no per-model window."""
     from ju import constants
     failing = acc.error is not None or (acc.blocked_until is not None and acc.blocked_until > now)
-    if not failing:
+    if not failing and not primary:
         return None, "the usage service reading is fine; the status line is not needed"
     if cap is None:
         return None, "no status-line capture for this account"

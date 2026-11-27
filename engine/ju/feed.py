@@ -21,11 +21,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, FrozenSet, List, Optional, Sequence
 
-from ju import accounts, formats, fsutil, ledger_query, pace as pace_mod, session_share as share_mod, timeutil, usage_client
+from ju import accounts, config, formats, fsutil, ledger_query, pace as pace_mod, session_share as share_mod, timeutil, usage_client
 from ju.constants import FEED_SCHEMA, RED_AT, SESSION_S, STALE_AFTER_S, WARMUP_E, WEEK_S
 from ju.contracts import Meter, Reading
 from ju.gate import AccountBlock, RefreshResult
-from ju.live_store import AccountLive
+from ju.live_store import AccountLive, ts_floor
 
 STATUSLINE_METERS = ("session", "weekly")      # R-27: the status line has no per-model window
 TOP_PROJECTS = 8
@@ -87,10 +87,25 @@ def pace_block(p) -> dict:
             "reset_due": p.reset_due, "words": p.words}
 
 
-def _error_block(acc: AccountLive) -> Optional[dict]:
+FOREIGN_RESET_TEXT = "This reading matches {other}'s reset"
+
+
+def _error_block(acc: AccountLive, label: Callable[[str], str]) -> Optional[dict]:
+    """The account's error; a foreign reset names the other account by its label (R-14)."""
     if acc.error is None:
         return None
-    return {"kind": acc.error.kind, "text": acc.error.text, "until": _iso(acc.blocked_until)}
+    text = acc.error.text
+    if acc.error.kind == "identity_foreign_reset" and acc.error.other is not None:
+        text = FOREIGN_RESET_TEXT.format(other=label(acc.error.other))
+    return {"kind": acc.error.kind, "text": text, "until": _iso(acc.blocked_until)}
+
+
+def _label(cfg, all_keys: Sequence[str]) -> Callable[[str], str]:
+    """An account's on-screen label: its email when its identity is known, else its folder name."""
+    def label(key: str) -> str:
+        ident = accounts.read_identity(key, cfg)
+        return ident.email if ident is not None and ident.email else accounts.short_name(key, all_keys)
+    return label
 
 
 def _others(refresh: RefreshResult, block: AccountBlock) -> Dict[str, int]:
@@ -121,11 +136,14 @@ _KINDS = {"session": "session", "weekly": "weekly_all"}
 def with_capture(acc: AccountLive, reading: Reading) -> AccountLive:
     """RULING 28: an accepted status-line reading as the account's stored reading. `data` keeps
     the usage-service reply shape (so E11 parses it and E14's due() sees it): session and weekly
-    from the capture, the per-model weeklies and the credits flag carried from the last service
+    from the capture (a window it lacks keeps the stored meter), the per-model weeklies and the credits flag carried from the last service
     reply (their age stays in meter_log, which the feed reads)."""
     old = usage_client.parse(acc.data).meters if acc.data is not None else []
-    limits = [{"kind": _KINDS[m.id], "percent": m.pct, "resets_at": _iso(m.resets_at)}
-              for mid in STATUSLINE_METERS for m in reading.meters if m.id == mid]
+    taken = {m.id: m for m in reading.meters if m.id in STATUSLINE_METERS}
+    kept = {m.id: m for m in old}
+    # a capture replaces only the windows it carries; one missing from it keeps the stored meter
+    limits = [{"kind": _KINDS[mid], "percent": m.pct, "resets_at": _iso(m.resets_at)}
+              for mid in STATUSLINE_METERS for m in [taken.get(mid) or kept.get(mid)] if m is not None]
     for m in old:
         if m.id not in STATUSLINE_METERS:
             limits.append({"kind": "weekly_scoped", "percent": m.pct, "resets_at": _iso(m.resets_at),
@@ -142,10 +160,11 @@ def _service_read_at(conn, members: Sequence[str]) -> Callable[[str], Optional[d
     marks = ",".join("?" * len(members))
 
     def read_at(meter_id: str) -> Optional[datetime]:
-        times = [timeutil.parse_iso(r["ts"]) for r in conn.execute(
-            f"SELECT ts FROM meter_log WHERE account IN ({marks}) AND meter = ? AND source = 'service'",
-            [*members, meter_id])]
-        return max(times) if times else None
+        # the newest by insertion, read backward: ts text carries different offsets (gate._service_at)
+        row = conn.execute(
+            f"SELECT ts FROM meter_log WHERE account IN ({marks}) AND meter = ? AND source = 'service' "
+            "ORDER BY rowid DESC LIMIT 1", [*members, meter_id]).fetchone()
+        return timeutil.parse_iso(row["ts"]) if row else None
     return read_at
 
 
@@ -205,8 +224,8 @@ def _session_share(conn, members: Sequence[str], meters: List[dict], no_session:
     period_start = period_end - timedelta(seconds=WEEK_S)
     marks = ",".join("?" * len(members))
     rows = [r for r in conn.execute(
-        f"SELECT ts, meter, pct, resets_at FROM meter_log WHERE account IN ({marks}) "
-        f"AND meter IN ('session', 'weekly')", list(members)).fetchall()
+        f"SELECT ts, meter, pct, resets_at FROM meter_log WHERE ts >= ? AND account IN ({marks}) "
+        f"AND meter IN ('session', 'weekly')", [ts_floor(period_start), *members]).fetchall()
             if period_start <= timeutil.parse_iso(r["ts"]) <= now]
     if no_session:
         since = period_start.astimezone().date().isoformat()
@@ -234,6 +253,7 @@ def account_blocks(*, cfg, refresh: RefreshResult, conn, now: datetime,
     """The `accounts` list: one block per claude.ai account (folders sharing a uuid are one),
     keyed by its lowest-numbered folder, sorted by number. `views` = views(...) of this refresh."""
     out = []
+    label = _label(cfg, [k for b in refresh.accounts for k in b.folders])
     for block, view in zip(refresh.accounts, views):
         members = accounts.ordered(block.folders, cfg)
         key = members[0]
@@ -247,7 +267,7 @@ def account_blocks(*, cfg, refresh: RefreshResult, conn, now: datetime,
             "key": key, "number": accounts.number_for(cfg, key),
             "email": ident.email if ident else None, "uuid": uuid, "folders": list(members),
             "weekly_reset": weekly["resets_at"] if weekly else None, "flags": flags,
-            "warning": acc.warning, "error": _error_block(acc), "no_session_meter": no_session,
+            "warning": acc.warning, "error": _error_block(acc, label), "no_session_meter": no_session,
             "meters": meters,
             "session_share": _session_share(conn, members, meters, no_session, now),
             "missing_people": missing})
@@ -322,7 +342,7 @@ def build_feed(*, cfg, refresh: RefreshResult, conn, pricing, now: datetime, ver
     return {
         "schema": FEED_SCHEMA, "version": version, "generated": _iso(now), "next_due": _iso(refresh.next_due),
         "rules": rules(cfg),
-        "me": {"user": cfg.user, "install_id": cfg.install_id},
+        "me": {"user": config.user_name(cfg), "install_id": cfg.install_id},
         "accounts": account_blocks(cfg=cfg, refresh=refresh, conn=conn, now=now,
                                    views=seen, split_view=split_view),
         "totals": {"as_of": _iso(now),
@@ -331,6 +351,7 @@ def build_feed(*, cfg, refresh: RefreshResult, conn, pricing, now: datetime, ver
         "windows": _windows(conn, pricing, now),
         "models": _models(ledger_query.top_models(conn, pricing, week_from, day, None)),
         "projects": _projects(ledger_query.top_projects(conn, pricing, week_from, day, None)),
+        "projects_today": _projects(ledger_query.top_projects(conn, pricing, day, day, None)),
         "months": _months(conn, pricing),
         "people": list(people),
         "statusline": statusline_block(cfg, refresh, seen),

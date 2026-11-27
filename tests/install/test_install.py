@@ -33,8 +33,8 @@ if sys.argv[1:3] == ["config", "get"]:
 """
 
 
-def fake_dmg(version=h.VERSION, recorder=False) -> Path:
-    key = (version, recorder)
+def fake_dmg(version=h.VERSION, recorder=False, bundle_id=h.APP_ID) -> Path:
+    key = (version, recorder, bundle_id)
     if key in _DMG and _DMG[key].exists():
         return _DMG[key]
     d = h.scratch()
@@ -43,7 +43,7 @@ def fake_dmg(version=h.VERSION, recorder=False) -> Path:
     (app / "Resources").mkdir(parents=True)
     (app / "MacOS").mkdir()
     with open(app / "Info.plist", "wb") as f:
-        plistlib.dump({"CFBundleIdentifier": h.APP_ID, "CFBundleExecutable": "Jusage",
+        plistlib.dump({"CFBundleIdentifier": bundle_id, "CFBundleExecutable": "Jusage",
                        "CFBundleShortVersionString": version, "LSMinimumSystemVersion": "13.0"}, f)
     (app / "MacOS" / "Jusage").write_text("#!/bin/sh\n")
     shutil.copytree(h.ROOT / "engine", app / "Resources" / "engine", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -57,6 +57,44 @@ def fake_dmg(version=h.VERSION, recorder=False) -> Path:
     assert r.returncode == 0, r.stderr
     _DMG[key] = host
     return host
+
+
+def hdiutil_info() -> str:
+    return subprocess.run(["hdiutil", "info"], capture_output=True, text=True).stdout
+
+
+def still_attached(tmp, info=hdiutil_info, tries=20, pause=0.5) -> bool:
+    """True if a disk image under `tmp` is still attached after waiting for the disk-image daemon to
+    finish tearing it down (a detached volume's device node lingers for a moment)."""
+    import time
+    for i in range(tries):
+        if str(tmp) not in info():
+            return False
+        if i < tries - 1:
+            time.sleep(pause)
+    return True
+
+
+class StillAttachedTests(unittest.TestCase):
+    def test_a_lingering_device_that_goes_away_is_not_a_leak(self):
+        calls = iter(["x /tmp/t/a.dmg", "x /tmp/t/a.dmg", "clean"])
+        self.assertFalse(still_attached("/tmp/t", info=lambda: next(calls), pause=0))
+
+    def test_an_image_that_stays_attached_is_a_leak(self):
+        self.assertTrue(still_attached("/tmp/t", info=lambda: "x /tmp/t/a.dmg", tries=3, pause=0))
+
+
+# codesign as the installer uses it, signed by FAKE_TEAM (J's team unless a test says otherwise):
+# `--verify ... -R=<requirement>` passes only when the requirement names that team; `-dv` prints it.
+CODESIGN_STUB = r"""#!/bin/bash
+echo "codesign $*" >> '@CALLS@'
+team="${FAKE_TEAM:-9WTFGV63S2}"
+case " $* " in
+  *" -dv "*) echo "Authority=Developer ID Application: Someone ($team)" >&2; echo "TeamIdentifier=$team" >&2; exit 0 ;;
+  *" --verify "*) case "$*" in *"\"$team\""*) exit 0 ;; *) echo "test-requirement: code failed to satisfy specified code requirement(s)" >&2; exit 3 ;; esac ;;
+esac
+exit 1
+"""
 
 
 class Installer(unittest.TestCase):
@@ -74,9 +112,15 @@ class Installer(unittest.TestCase):
         for name in ("open", "osascript"):
             h.write_exe(self.stubs / name, f"#!/bin/bash\necho \"{name} $*\" >> '{self.calls}'\nexit 0\n")
         h.write_exe(self.stubs / "spctl", f"#!/bin/bash\necho \"spctl $*\" >> '{self.calls}'\necho 'accepted source=Notarized Developer ID'\nexit 0\n")
+        h.write_exe(self.stubs / "codesign", CODESIGN_STUB.replace("@CALLS@", str(self.calls)))
         h.write_exe(self.stubs / "pgrep", "#!/bin/bash\nexit 1\n")
         h.write_exe(self.stubs / "xcode-select", "#!/bin/bash\n[ \"$1\" = \"-p\" ] && { echo /Library/Developer/CommandLineTools; exit 0; }\nexit 0\n")
         h.write_exe(self.stubs / "sw_vers", "#!/bin/bash\n[ \"$1\" = \"-productVersion\" ] && { echo 14.5; exit 0; }\nexec /usr/bin/sw_vers \"$@\"\n")
+
+        self.addCleanup(self.no_disk_image_left_attached)
+
+    def no_disk_image_left_attached(self):
+        self.assertFalse(still_attached(self.tmp), "install.sh left its disk image attached")
 
     def env(self, **extra):
         base = {"JUSAGE_APPS_DIR": str(self.apps), "JUSAGE_TRASH": str(self.stubs / "trash"),
@@ -120,6 +164,23 @@ class TestOptions(Installer):
         self.assertEqual(rc, 0)
         for opt in ("--reports", "--user", "--projects", "--from-source", "--no-launch", "--help"):
             self.assertIn(opt, out)
+
+    def test_docs_list_exactly_the_installer_options(self):
+        """RULINGS 42/52: README and AGENT-SETUP name the options install.sh takes, and none it dropped."""
+        import re
+        rc, out = self.install("-h")
+        options = set(re.findall(r"(?m)^  (?:-h, )?(--[a-z-]+)", out))
+        self.assertEqual(options, {"--reports", "--user", "--projects", "--from-source", "--no-launch", "--help"})
+        readme = (h.ROOT / "README.md").read_text()
+        table = set(re.findall(r"(?m)^\| `(--[a-z-]+)", readme))
+        self.assertEqual(table, options - {"--help"})
+        for doc in ("README.md", "AGENT-SETUP.md"):
+            text = (h.ROOT / doc).read_text()
+            for gone in ("--dir", "--no-app"):
+                self.assertNotRegex(text, re.escape(gone) + r"\b", f"{doc} still names {gone}")
+        agent = (h.ROOT / "AGENT-SETUP.md").read_text()
+        for opt in ("--user", "--reports", "--projects", "--no-launch", "--from-source"):
+            self.assertIn(opt, agent)
 
     def test_unknown_option(self):
         rc, out = self.install("--dir", "x")
@@ -263,29 +324,31 @@ class TestDownloadInstall(Installer):
         self.assertIn("install.log", out)
         self.nothing_installed()
 
+    def test_other_developer_team_refused(self):
+        """Review-security 4: notarized by somebody is not enough; only J's team (9WTFGV63S2) installs."""
+        rc, out = self.install(FAKE_TEAM="ABCDE12345")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("9WTFGV63S2", out)
+        self.nothing_installed()
+
+    def test_disk_image_and_app_checked_against_the_team(self):
+        rc, out = self.install()
+        self.assertEqual(rc, 0, out)
+        verifies = [l for l in self.calls.read_text().splitlines() if l.startswith("codesign --verify")]
+        self.assertEqual(len(verifies), 2, verifies)
+        self.assertTrue(verifies[0].endswith("jusage.dmg"), verifies[0])
+        self.assertTrue(verifies[1].endswith("jusage.app"), verifies[1])
+        for v in verifies:
+            self.assertIn('certificate leaf[subject.OU] = "9WTFGV63S2"', v)
+
     def test_wrong_bundle_id_refused(self):
-        host = fake_dmg()
-        d = h.scratch()
-        # a DMG whose app has another bundle id
-        src = d / "src"
-        shutil.copytree(self._mount_copy(host), src)
-        with open(src / "jusage.app" / "Contents" / "Info.plist", "wb") as f:
-            plistlib.dump({"CFBundleIdentifier": "com.example.other", "CFBundleShortVersionString": "1.0.0", "LSMinimumSystemVersion": "13.0"}, f)
-        (d / "host").mkdir()
-        subprocess.run(["hdiutil", "create", "-quiet", "-volname", "jusage", "-srcfolder", str(src), "-format", "UDZO", str(d / "host" / "jusage-latest.dmg")], check=True)
-        rc, out = self.install(JUSAGE_DOWNLOAD_BASE="file://" + str(d / "host"))
+        # Built straight from a source folder: mounting the good DMG to copy it raced the disk-image
+        # daemon in the full suite and left attached images behind.
+        host = fake_dmg(bundle_id="com.example.other")
+        rc, out = self.install(JUSAGE_DOWNLOAD_BASE="file://" + str(host))
         self.assertEqual(rc, 1)
         self.assertIn("bundle id", out)
         self.nothing_installed()
-
-    def _mount_copy(self, host):
-        mnt = h.scratch() / "mnt"
-        mnt.mkdir()
-        subprocess.run(["hdiutil", "attach", "-quiet", "-nobrowse", "-readonly", "-mountpoint", str(mnt), str(host / "jusage-latest.dmg")], check=True)
-        dst = h.scratch() / "copy"
-        shutil.copytree(mnt, dst, symlinks=True, ignore=shutil.ignore_patterns(".fseventsd", ".Trashes", ".DS_Store", ".Spotlight-V100"))
-        subprocess.run(["hdiutil", "detach", "-quiet", str(mnt)], check=True)
-        return dst
 
 
 class TestFromSource(Installer):
@@ -315,6 +378,19 @@ class TestFromSource(Installer):
         r = subprocess.run(["bash", "-c", f"shopt -s expand_aliases\n. '{self.home}/.zshrc'\njusage --version"],
                            env=h.clean_env(self.home), capture_output=True, text=True)
         self.assertEqual(r.stdout.strip(), h.VERSION, r.stderr)
+
+    def test_shell_characters_in_path_refused(self):
+        """Review-security 7: the alias body is double-quoted, so $, `, " or \\ in the path would be
+        run or mangled each time `jusage` is typed. Such a folder is refused before anything happens."""
+        for name in ("x$(touch PWNED)", "x`touch PWNED`", 'x"y', "x\\y"):
+            with self.subTest(name):
+                target = self.home / name
+                rc, out = self.install("--from-source", str(target), "--no-launch", JUSAGE_REPO_URL=self.url)
+                self.assertEqual(rc, 1, out)
+                self.assertIn("must not contain", out)
+                self.assertFalse(target.exists())
+                self.assertFalse((self.home / ".zshrc").exists() and "alias jusage=" in (self.home / ".zshrc").read_text())
+        self.assertEqual(list(self.home.rglob("PWNED")) + list(self.tmp.glob("PWNED")), [])
 
     def test_existing_install_folder_is_updated_not_refused(self):
         target = self.home / "src"

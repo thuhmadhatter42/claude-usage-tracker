@@ -19,7 +19,7 @@ enum SplitModel {
         TodayModel.accounts(feed: feed, settings: settings).flatMap { a in
             MeterRowModel.ordered(a.meters).compactMap { m -> SplitRow? in
                 guard let split = m.split else { return nil }
-                return SplitRow(id: "\(a.key)|\(m.id)", title: "\(AccountBlockModel.localPart(a.email)) · \(m.name)",
+                return SplitRow(id: "\(a.key)|\(m.id)", title: "\(a.label) · \(m.name)",
                                 text: text(split.parts, me: feed.me.installId))
             }
         }
@@ -37,18 +37,28 @@ enum DetailModel {
 
     /// Open 5-hour windows on shown accounts: "sam 19:00–00:00  6.2M · $21.40".
     static func windows(feed: Feed, settings: AppSettings, time: DisplayTime) -> [ValueRow] {
-        feed.windows.filter(\.open).compactMap { w in
+        guard settings.isSectionShown(.windows) else { return [] }     // "Open 5-hour windows" off (R-84)
+        return feed.windows.filter(\.open).compactMap { w in
             let owner = feed.accounts.first { $0.key == w.account || $0.folders.contains(w.account) }
             if let owner, !settings.isAccountShown(owner.key) { return nil }
-            let name = owner.map { AccountBlockModel.localPart($0.email) } ?? w.account
+            let name = owner.map { $0.label } ?? w.account
             return ValueRow(id: "\(w.account)|\(w.start.timeIntervalSince1970)",
                             name: "\(name) \(time.clock(w.start))–\(time.clock(w.end))",
                             text: "\(Fmt.tokens(w.tokens)) · \(Fmt.usd(w.usd))")
         }
     }
 
-    static func models(feed: Feed) -> [ValueRow] {
-        feed.models.prefix(4).map { ValueRow(id: $0.id, name: $0.name, text: "\(Fmt.tokens($0.tokens)) · \(Fmt.usd($0.usd))") }
+    static func models(feed: Feed, settings: AppSettings) -> [ValueRow] {
+        guard settings.isSectionShown(.models) else { return [] }      // "Busiest models" off: only these rows go
+        return feed.models.prefix(4).map { ValueRow(id: $0.id, name: $0.name, text: "\(Fmt.tokens($0.tokens)) · \(Fmt.usd($0.usd))") }
+    }
+
+    /// The fold shows while any of its parts has something to show: the plan split (no toggle), the open
+    /// windows, the busiest models.
+    static func isShown(feed: Feed, settings: AppSettings, time: DisplayTime) -> Bool {
+        !SplitModel.rows(feed: feed, settings: settings).isEmpty
+            || !windows(feed: feed, settings: settings, time: time).isEmpty
+            || !models(feed: feed, settings: settings).isEmpty
     }
 }
 
@@ -72,7 +82,7 @@ struct SplitFold: View {
                 ForEach(DetailModel.windows(feed: feed, settings: settings, time: time)) {
                     FoldRow(title: $0.name, value: $0.text, palette: palette)
                 }
-                ForEach(DetailModel.models(feed: feed)) { FoldRow(title: $0.name, value: $0.text, palette: palette) }
+                ForEach(DetailModel.models(feed: feed, settings: settings)) { FoldRow(title: $0.name, value: $0.text, palette: palette) }
             }
         }
     }

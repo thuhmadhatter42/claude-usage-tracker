@@ -6,7 +6,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from tests.engine import support
-from ju import accounts, doctor, feed, fsutil, houselog, keychain, timeutil
+from ju import accounts, doctor, feed, fsutil, houselog, keychain, timeutil, usage_client
 from ju.live_store import LiveStore, StoreIO
 from ju.config import ConfigStore
 
@@ -35,7 +35,7 @@ class DoctorCase(unittest.TestCase):
     def run_doctor(self, items, **kw):
         with support.fake_security(items) as sec:
             store = LiveStore(StoreIO(fsutil.write_private, fsutil.move_aside_corrupt, fsutil.read_json,
-                                      fsutil.CorruptFile, houselog.log))
+                                      fsutil.CorruptFile, houselog.log, usage_client.parse))
             lines = doctor.run(self.h.state, self.env, store=store, **kw)
             self.asked, self.refused = sec.services_asked(), sec.refused()
         return lines

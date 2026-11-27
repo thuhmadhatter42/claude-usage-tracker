@@ -117,7 +117,8 @@ struct Feed: Decodable {
         let id: String
         let name: String
         let pct: Double
-        let resetsAt: Date
+        /// nil when Anthropic sent no reset time (engine emits null): no reset text, pace guarded.
+        let resetsAt: Date?
         let readAt: Date
         let source: String
         let periodS: TimeInterval
@@ -140,8 +141,9 @@ struct Feed: Decodable {
     struct Account: Decodable {
         let key: String
         let number: Int
-        let email: String
-        let uuid: String
+        /// nil when the folder has no login identity (engine emits null).
+        let email: String?
+        let uuid: String?
         let folders: [String]
         let weeklyReset: Date?
         let flags: [String]
@@ -226,7 +228,9 @@ struct Feed: Decodable {
     let totals: Totals
     let windows: [Window]
     let models: [ModelUse]
+    /// The last 7 days' projects; `projectsToday` is today's, for the panel's "Projects today" (RULINGS 48h).
     let projects: [ProjectUse]
+    let projectsToday: [ProjectUse]
     let months: [Month]
     private let peopleBox: LossyArray<Person>
     let statusline: [String: StatusLine]
@@ -239,7 +243,8 @@ struct Feed: Decodable {
     var droppedPeople: Int { peopleBox.dropped }
 
     enum CodingKeys: String, CodingKey {
-        case schema, version, generated, nextDue = "next_due", rules, me, accounts, totals, windows, models, projects, months
+        case schema, version, generated, nextDue = "next_due", rules, me, accounts, totals, windows, models, projects
+        case projectsToday = "projects_today", months
         case peopleBox = "people", statusline, dashboard, share, notes
     }
 
@@ -275,4 +280,21 @@ struct Feed: Decodable {
         @unknown default: return "feed"
         }
     }
+}
+
+extension Feed.Account {
+    /// The short name to show: the email's local part, else the config folder's name without its leading dot
+    /// and "claude" prefix, else "Account N". An account with no login identity still renders.
+    var label: String {
+        if let email, !email.isEmpty { return email.split(separator: "@", maxSplits: 1).first.map(String.init) ?? email }
+        if let f = folders.first {
+            let name = (f as NSString).lastPathComponent
+            let trimmed = name.drop(while: { $0 == "." })
+            if !trimmed.isEmpty { return String(trimmed) }
+        }
+        return "Account \(number)"
+    }
+
+    /// The full line for hovers and notifications: the email, or the label when there is none.
+    var identity: String { email.flatMap { $0.isEmpty ? nil : $0 } ?? label }
 }

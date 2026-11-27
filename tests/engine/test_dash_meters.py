@@ -22,6 +22,16 @@ class Meters(unittest.TestCase):
         self.assertIn('data-state="amber"', h)
         self.assertEqual(segs(h, "u"), 2)
 
+    def test_state_from_a_report_cannot_break_the_attribute(self):
+        """Review-security 1: pace.state comes from another Mac's report. Only green, amber and red
+        reach the page; anything else is "none", never raw text in an attribute."""
+        evil = 'x" onmouseover="fetch(1)" a="'
+        h = meters.meter_html(meter(state=evil), NOW, RULES)
+        self.assertIn('data-state="none"', h)
+        self.assertNotIn("onmouseover", h)
+        for st in ("green", "amber", "red"):
+            self.assertIn(f'data-state="{st}"', meters.meter_html(meter(state=st), NOW, RULES))
+
     def test_twenty_four_segments(self):
         h = meters.meter_html(meter(pct=25.0, landing=50.0), NOW, RULES)
         self.assertEqual(segs(h, "u") + segs(h, "f") + segs(h, ""), 24)

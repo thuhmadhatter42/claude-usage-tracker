@@ -11,13 +11,20 @@
 #            on PATH the run FAILS, it is never skipped.
 # A repo with no engine tests is a FAIL: "no tests" must never read as a pass.
 # JUSAGE_ROOT overrides the repo root (the harness's own tests use it).
+# Guard (RULING 54): /Applications/jusage.app and ~/jusage are snapshotted (every entry's mtime, size,
+# mode) before the suites and compared after; any change FAILS the run. JUSAGE_GUARD_PATHS overrides
+# the guarded paths for the harness's own tests.
 set -u
-ROOT="${JUSAGE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="${JUSAGE_ROOT:-$(cd "$HERE/.." && pwd)}"
 PY="${PYTHON:-python3}"
 cd "$ROOT" || { echo "cannot enter $ROOT"; echo FAIL; exit 1; }
 
 failed=()
 ran=0
+
+GUARD_SNAP="${TMPDIR:-/tmp}/jusage-guard.$$.json"     # `compare` deletes it
+"$PY" "$HERE/guard_real_install.py" snapshot "$GUARD_SNAP" || { echo "guard: snapshot failed"; echo FAIL; exit 1; }
 
 suite() {   # suite <name> <command...>
     local name="$1"; shift
@@ -57,6 +64,9 @@ if [ -d app/Sources/Jusage ] && [ -n "$(find app/Sources/Jusage -type f ! -name 
 else
     echo "== swift =="; echo "-- swift: skipped (app/Sources/Jusage has no sources beyond .keep)"
 fi
+
+echo "== guard =="
+"$PY" "$HERE/guard_real_install.py" compare "$GUARD_SNAP" || failed+=("guard (the real install changed)")
 
 echo
 echo "suites run: $ran"

@@ -13,10 +13,12 @@ import SwiftUI
 final class AppUpdater: ObservableObject {
     @Published private(set) var canCheck = false
     private let controller: SPUStandardUpdaterController?
+    private let launchCheck: Bool
 
     /// No updater when the process is not a bundled app that carries a feed (`swift run`, tests):
     /// Sparkle would only show an error there.
     init(bundle: Bundle = .main) {
+        launchCheck = AppUpdater.launchCheckAllowed(bundle: bundle)
         guard AppUpdater.isUpdatable(bundle: bundle) else {
             controller = nil
             AppLog.shared.info("update", "no updater: not a bundled app with SUFeedURL")
@@ -32,6 +34,13 @@ final class AppUpdater: ObservableObject {
         bundle.bundleURL.pathExtension == "app" && bundle.object(forInfoDictionaryKey: "SUFeedURL") is String
     }
 
+    /// No launch check for a `.dev` bundle (it would offer to replace itself with the release) or when the
+    /// plist turns automatic checks off (`build-app.sh --dev` does).
+    static func launchCheckAllowed(bundle: Bundle) -> Bool {
+        if (bundle.bundleIdentifier ?? "").hasSuffix(".dev") { return false }
+        return (bundle.object(forInfoDictionaryKey: "SUEnableAutomaticChecks") as? Bool) != false
+    }
+
     private var checkedAtLaunch = false
 
     /// Once per launch: Sparkle's silent check (its own scheduled check waits out the 24 h interval, so an app
@@ -40,6 +49,10 @@ final class AppUpdater: ObservableObject {
     func checkInBackgroundAtLaunch() {
         guard !checkedAtLaunch else { return }
         checkedAtLaunch = true
+        guard launchCheck else {
+            AppLog.shared.info("update", "launch check skipped (dev build or automatic checks off)")
+            return
+        }
         guard let c = controller else {
             AppLog.shared.info("update", "launch check skipped (no updater)")
             return

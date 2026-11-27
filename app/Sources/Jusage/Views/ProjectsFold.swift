@@ -5,7 +5,7 @@ enum ProjectsModel {
     static let title = "Projects today"
 
     static func rows(feed: Feed) -> [ValueRow] {
-        feed.projects.prefix(5).map { ValueRow(id: $0.name, name: $0.name, text: "\(Int(($0.share * 100).rounded()))%") }
+        feed.projectsToday.prefix(5).map { ValueRow(id: $0.name, name: $0.name, text: "\(Int(($0.share * 100).rounded()))%") }
     }
 }
 

@@ -242,6 +242,20 @@ class Sources(unittest.TestCase):
         self.assertEqual(a["missing_people"], ["Lee"])
 
 
+class WithCapture(unittest.TestCase):
+    def test_capture_without_five_hour_keeps_the_session_meter(self):
+        """Review-engine 5: a capture carrying only seven_day replaces weekly and keeps every other
+        stored meter, the session one included."""
+        acc = AccountLive(fetched=NOW - timedelta(minutes=5), data=REPLY, identity_uuid="u-1")
+        cap = Reading(folder="/x", fetched=NOW, flags=[], uuid="u-1", source="statusline", meters=[
+            Meter("weekly", "Weekly", 60.0, timeutil.parse_iso("2026-12-01T01:00:00+00:00"), 604800)])
+        new = feed.with_capture(acc, cap)
+        from ju import usage_client
+        got = {m.id: m.pct for m in usage_client.parse(new.data).meters}
+        self.assertEqual(got, {"session": 37.0, "weekly": 60.0, "weekly:fable": 18.0})
+        self.assertFalse(usage_client.parse(new.data).no_session_meter)
+
+
 class NothingDropped(unittest.TestCase):
     def test_hidden_nothing_dropped(self):
         s = Scenario(self)
@@ -278,6 +292,21 @@ class Ledger(unittest.TestCase):
         self.assertEqual([m["name"] for m in f["models"]], ["opus-5", "sonnet-5", "unknown-9"])
         self.assertEqual(f["projects"][0]["name"], "jusage")
         self.assertEqual(f["projects"][0]["share"], 1.0)
+        self.assertEqual(f["projects_today"], f["projects"])          # all of it today
+
+    def test_projects_today_is_today_only(self):
+        """RULINGS 48h: "Projects today" reads its own list; `projects` stays the week's."""
+        s = Scenario(self)
+        from ju import ledger_scan
+        support.write_transcript(s.h.home / ".claude", [
+            {"ts": "2026-11-24T10:00:00-08:00", "model": "claude-opus-5", "input": 9000, "output": 1}], cwd="/work/old")
+        support.write_transcript(s.h.home / ".claude", [
+            {"ts": "2026-11-26T20:00:00-08:00", "model": "claude-opus-5", "input": 100, "output": 1}],
+            session="sess-2", cwd="/work/jusage")
+        ledger_scan.scan(s.conn, [s.k1])
+        f = s.build([s.block(s.k1, fresh(), "u-1")])
+        self.assertEqual([p["name"] for p in f["projects"]], ["old", "jusage"])
+        self.assertEqual([(p["name"], p["share"]) for p in f["projects_today"]], [("jusage", 1.0)])
         self.assertEqual(f["windows"][0]["account"], s.k1)
         self.assertTrue(f["windows"][0]["open"])
         self.assertEqual(len(f["months"]), 3)
@@ -299,6 +328,37 @@ class SessionShare(unittest.TestCase):
     def test_no_readings_no_share(self):
         s = Scenario(self)
         self.assertIsNone(s.build([s.block(s.k1, fresh(), "u-1")])["accounts"][0]["session_share"])
+
+
+class MeterLogReads(unittest.TestCase):
+    def test_feed_reads_only_the_weekly_period(self):
+        """Review-engine 8: a long meter_log history is filtered in SQL, so a run parses the period's
+        rows, not every row ever logged."""
+        s = Scenario(self)
+        weekly = "2026-11-30T17:00:00-08:00"
+        old = [(timeutil.iso(NOW - timedelta(days=9, minutes=i)), s.k1, m, 1.0, weekly)
+               for i in range(1500) for m in ("session", "weekly")]
+        s.conn.executemany("INSERT INTO meter_log (ts, account, meter, pct, resets_at, source) VALUES (?,?,?,?,?,'service')", old)
+        calls = []
+        real = timeutil.parse_iso
+
+        def counting(v):
+            calls.append(v)
+            return real(v)
+        from unittest import mock
+        with mock.patch.object(feed.timeutil, "parse_iso", counting):
+            s.build([s.block(s.k1, fresh(), "u-1")])
+        self.assertLess(len(calls), 300, "meter_log rows outside the weekly period were parsed")
+
+
+class ForeignResetLabel(unittest.TestCase):
+    def test_error_names_the_other_account(self):
+        """RULING 31 / R-14: the feed fills in the other account's label."""
+        s = Scenario(self)
+        err = ErrorInfo("identity_foreign_reset", "This reading matches another account's reset", NOW, other=s.k2)
+        f = s.build([s.block(s.k1, AccountLive(error=err), "u-1"), s.block(s.k2, fresh(), "u-2")])
+        text = f["accounts"][0]["error"]["text"]
+        self.assertEqual(text, "This reading matches pat@example.com's reset")
 
 
 if __name__ == "__main__":

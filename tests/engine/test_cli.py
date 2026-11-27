@@ -168,7 +168,8 @@ class MenuJson(Base):
             return Reading(self.k1, timeutil.parse_iso(capture["captured_at"]),
                            [Meter("session", "Session", 44.0, resets, 18000)], [], "u-1", "statusline"), None
 
-        self.stand_in("ju.statusline", backup_reading=backup_reading, disagree=lambda s, c: False)
+        self.stand_in("ju.statusline", backup_reading=backup_reading, disagree=lambda s, c: False,
+                      capture_to_reading=lambda cap, uuid: cap)
         rc, out, err = self.main("menu-json")
         self.assertEqual(rc, 0, err)
         a = json.loads(out)["accounts"][0]
@@ -200,7 +201,8 @@ class StatuslinePrimary(Base):
         resets = timeutil.now() + timedelta(hours=2)
         weekly = timeutil.now() + timedelta(days=3)
 
-        def backup_reading(acc, cap, others, now, key=None):
+        def backup_reading(acc, cap, others, now, key=None, primary=False):
+            self.assertTrue(primary, "RULING 28: captures land as the primary reading, not as a stand-in")
             self.judged.append(key)
             if not accept:
                 return None, "weekly reset matches another account"
@@ -208,7 +210,8 @@ class StatuslinePrimary(Base):
             return Reading(key, at, [Meter("session", "Session", float(cap["pct"]), resets, 18000),
                                      Meter("weekly", "Weekly", 60.0, weekly, 604800)], [], "u-1", "statusline"), None
 
-        self.stand_in("ju.statusline", backup_reading=backup_reading, disagree=lambda s, c: False)
+        self.stand_in("ju.statusline", backup_reading=backup_reading, disagree=lambda s, c: False,
+                      capture_to_reading=lambda cap, uuid: cap)
 
     def backup_on(self, on=True):
         from ju.config import ConfigStore
@@ -433,6 +436,36 @@ class ShareAndDashboard(Base):
         self.assertEqual(len(s["write"]), 2)
         self.assertEqual(p["write"], [self.h.state / "dashboard.html"])
         self.assertEqual(json.loads(out)["dashboard"], str(self.h.state / "dashboard.html"))
+
+    def test_menu_json_any_share_crash_keeps_feed(self):
+        """Review-security 3: whatever a peer's report makes the share, people or split step raise,
+        this Mac's own meters still ship; the failure is the feed's share.error."""
+        reports = self.h.home / "shared"
+        reports.mkdir()
+        self.fake_share()
+        self.fake_page()
+        self.items = {self.service_for(self.k1): login_blob()}
+        with support.FakeUsageServer([(200, {}, reply())]) as srv:
+            self.main("share", "--reports", str(reports), url=srv.url)     # a stored reading: meters to split
+        called = []
+
+        def boom(*a, **k):
+            called.append(1)
+            raise RecursionError("maximum recursion depth exceeded")
+        for step in ("people", "meter_split", "load_reports"):
+            with self.subTest(step):
+                self.fake_share()
+                setattr(sys.modules["ju.share"], step, boom)
+                rc, out, err = self.main("menu-json")
+                self.assertEqual(rc, 0, err)
+                feed = json.loads(out)
+                self.assertEqual(feed["accounts"][0]["key"], self.k1)
+                self.assertTrue(feed["accounts"][0]["meters"])
+                if step != "meter_split":
+                    self.assertIn("recursion", feed["share"]["error"])
+                rc, out, err = self.main("live")
+                self.assertEqual(rc, 0, err)
+        self.assertGreaterEqual(len(called), 4)          # every step really ran and raised
 
     def test_menu_json_share_error_keeps_feed(self):
         self.fake_share()

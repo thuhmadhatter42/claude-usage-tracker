@@ -45,4 +45,14 @@ final class ErrorBannerTests: XCTestCase {
         XCTAssertEqual(BannerText.unknownKinds(in: f), ["new_kind"])
         XCTAssertEqual(BannerText.unknownKinds(in: try Fixture.feed()), [])
     }
+
+    /// Review 9: the engine's text names the other account; the banner must say it, not only the hover.
+    func testForeignResetBannerNamesTheOtherAccount() throws {
+        let f = try ViewFixture.feed { a in
+            a[0]["error"] = ["kind": "identity_foreign_reset", "text": "This reading matches pat's reset", "until": NSNull()]
+        }
+        let b = BannerText.banners(feed: f, runError: nil, settings: AppSettings(), time: ViewFixture.time())
+        XCTAssertEqual(b.first?.text, "sam: This reading matches pat's reset")
+        XCTAssertEqual(b.first?.hover, "This reading matches pat's reset")
+    }
 }

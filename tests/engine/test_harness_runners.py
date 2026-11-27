@@ -205,6 +205,70 @@ class RunAllTests(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertEqual(lines[-1], "FAIL")
 
+    # ---- RULING 54: the run fails if the real install changes while it runs
+
+    def guarded(self):
+        g = self.tmp / "guarded" / "jusage.app" / "Contents" / "Resources"
+        write(g / "deep" / "file.txt", "x")
+        return self.tmp / "guarded" / "jusage.app"
+
+    def test_guard_untouched_install_passes_and_names_what_it_watched(self):
+        g = self.guarded()
+        self.engine_test("ok", "pass")
+        rc, lines, text = self.run_all(JUSAGE_GUARD_PATHS=str(g))
+        self.assertEqual((rc, lines[-1]), (0, "ALL PASS"), text)
+        self.assertIn(f"guard: watching {g}", text)
+
+    def test_guard_deep_mtime_change_fails_the_run(self):
+        g = self.guarded()
+        deep = g / "Contents" / "Resources" / "deep" / "file.txt"
+        self.engine_test("touch", f"import os; os.utime({str(deep)!r}, (1, 1))")   # folder mtimes stay put
+        rc, lines, text = self.run_all(JUSAGE_GUARD_PATHS=str(g))
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(lines[-1], "FAIL")
+        self.assertIn("real install changed", text)
+        self.assertIn(str(deep), text)
+
+    def test_guard_new_file_and_new_install_fail_the_run(self):
+        g = self.guarded()
+        absent = self.tmp / "absent-home-jusage"
+        self.engine_test("add", f"open({str(g / 'new.txt')!r}, 'w').close(); import os; os.mkdir({str(absent)!r})")
+        rc, lines, text = self.run_all(JUSAGE_GUARD_PATHS=f"{g}:{absent}")
+        self.assertEqual(lines[-1], "FAIL")
+        self.assertIn(str(g / "new.txt"), text)
+        self.assertIn(str(absent), text)
+
+    def test_guard_ignores_ds_store_and_git_worktrees_but_not_other_files(self):
+        g = self.guarded()
+        wt = g / ".git" / "worktrees" / "x"
+        wt.mkdir(parents=True)
+        (wt / "HEAD").write_text("a")
+        (g / ".DS_Store").write_text("a")
+        (g / "Contents" / ".DS_Store").write_text("a")
+        (g / ".git" / "HEAD").write_text("a")
+        touch = (f"import os; [os.utime(p, (1, 1)) for p in ({str(wt / 'HEAD')!r}, {str(g / '.DS_Store')!r}, "
+                 f"{str(g / 'Contents' / '.DS_Store')!r})]; open({str(wt / 'new')!r}, 'w').close(); "
+                 f"open({str(g / 'Contents' / '.DS_Store')!r}, 'w').write('bigger')")
+        self.engine_test("noise", touch)
+        rc, lines, text = self.run_all(JUSAGE_GUARD_PATHS=str(g))
+        self.assertEqual((rc, lines[-1]), (0, "ALL PASS"), text)
+
+    def test_guard_still_fails_for_a_normal_file_next_to_ignored_ones(self):
+        g = self.guarded()
+        (g / ".DS_Store").write_text("a")
+        (g / ".git" / "worktrees").mkdir(parents=True)
+        (g / ".git" / "HEAD").write_text("a")
+        self.engine_test("mixed", f"import os; os.utime({str(g / '.DS_Store')!r}, (1, 1)); os.utime({str(g / '.git' / 'HEAD')!r}, (1, 1))")
+        rc, lines, text = self.run_all(JUSAGE_GUARD_PATHS=str(g))
+        self.assertEqual(lines[-1], "FAIL")
+        self.assertIn(str(g / ".git" / "HEAD"), text)
+        self.assertNotIn(".DS_Store:", text)
+
+    def test_guard_defaults_to_the_real_app_and_home_jusage(self):
+        text = RUN_ALL.read_text()
+        self.assertIn("/Applications/jusage.app", text)
+        self.assertIn("pw_dir", (REPO / "tests" / "guard_real_install.py").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

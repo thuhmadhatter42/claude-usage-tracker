@@ -228,6 +228,38 @@ class LedgerDbTests(unittest.TestCase):
             self.assertEqual(p.returncode, 0, e.decode())
             self.assertEqual(o.decode().strip(), "3")
 
+    def test_many_openers_race_fresh_and_old(self):
+        """RULING 49: eight openers released at the same instant, on a v2 database and on no
+        database, ten rounds. The journal-mode switch and the migration run under one file lock, so
+        none sees 'database is locked', every one reads schema 3 in WAL, and the rows migrate once."""
+        import subprocess, sys, textwrap, time
+        engine = str(Path(ledger_db.__file__).parents[1])
+        for round_ in range(10):
+            state = self.state / f"r{round_}"
+            state.mkdir(mode=0o700)
+            old = round_ % 2 == 0
+            if old:
+                make_v2(state)
+            go = time.time() + 1.0
+            code = textwrap.dedent(f"""
+                import sys, time; sys.path.insert(0, {engine!r})
+                from ju import ledger_db
+                from pathlib import Path
+                while time.time() < {go!r}: pass
+                c = ledger_db.open_db(Path({str(state)!r}), folders={self.folders!r}, log=lambda *a, **k: None)
+                print(c.execute("PRAGMA user_version").fetchone()[0], c.execute("PRAGMA journal_mode").fetchone()[0])
+            """)
+            procs = [subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                     for _ in range(8)]
+            outs = [p.communicate(timeout=60) for p in procs]
+            for p, (o, e) in zip(procs, outs):
+                self.assertEqual(p.returncode, 0, e.decode())
+                self.assertEqual(o.decode().split(), ["3", "wal"])
+            c = sqlite3.connect(state / "usage.db")
+            # the v2 file's five rows lose the one from a backup folder (.claude.bak), once
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM records").fetchone()[0], 4 if old else 0)
+            c.close()
+
 
 if __name__ == "__main__":
     unittest.main()

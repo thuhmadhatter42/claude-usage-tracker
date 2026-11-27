@@ -14,7 +14,7 @@ enum RunResult: Equatable {
 enum FeedRunner {
     static let timeoutText = "Refresh took over 90 s and was stopped. Is a Keychain prompt waiting?"
 
-    /// `python -E -s <script> [--state-dir D] <args>`. `timeout` and `killGrace` are 90 s and 5 s in the app;
+    /// `python -B -E -s <script> [--state-dir D] <args>` (-B: no .pyc inside the sealed app, RULINGS 51). `timeout` and `killGrace` are 90 s and 5 s in the app;
     /// tests shorten them.
     static func run(python: URL, script: URL, args: [String], stateDir: String?,
                     timeout: TimeInterval = 90, killGrace: TimeInterval = 5) async -> RunResult {
@@ -37,7 +37,7 @@ enum FeedRunner {
                                     timeout: TimeInterval, killGrace: TimeInterval) -> RunResult {
         let p = Process()
         p.executableURL = python
-        p.arguments = ["-E", "-s", script.path] + (stateDir.map { ["--state-dir", $0] } ?? []) + args
+        p.arguments = ["-B", "-E", "-s", script.path] + (stateDir.map { ["--state-dir", $0] } ?? []) + args
         var env = ["LANG": "en_US.UTF-8"]
         env["HOME"] = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
         p.environment = env
