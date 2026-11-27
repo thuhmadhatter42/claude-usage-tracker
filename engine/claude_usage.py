@@ -319,8 +319,12 @@ class Run:
         def view(meter: Meter, uuid: Optional[str], now: datetime) -> feed.SplitView:
             if uuid not in windows:
                 windows[uuid] = self.own_windows(uuid)
-            split = sh.meter_split(meter, uuid, windows[uuid], reports, now,
-                                   me=(self.cfg.user, self.cfg.install_id))
+            try:
+                split = sh.meter_split(meter, uuid, windows[uuid], reports, now,
+                                       me=(self.cfg.user, self.cfg.install_id))
+            except Exception as e:     # one peer's data never takes the meter down (review-security 3)
+                houselog.log("error", "split not computed", meter=meter.id, error=str(e), trace=traceback.format_exc())
+                return feed.NO_SPLIT
             if split is None:
                 return feed.NO_SPLIT
             return feed.SplitView(split.to_feed(), list(split.missing))
@@ -370,7 +374,11 @@ def cmd_live(run: Run) -> int:
     refresh = run.refresh(manual=run.args.force)
     reports = None
     if run.cfg.reports_dir:
-        reports = run.share(refresh, write=False)[0]
+        try:
+            reports = run.share(refresh, write=False)[0]
+        except Exception as e:     # a peer's file never hides this Mac's own meters (review-security 3)
+            houselog.log("error", "live: shared reports not read", error=str(e), trace=traceback.format_exc())
+            print(f"Shared reports not read: {e or type(e).__name__}", file=sys.stderr)
     cli_report.print_live(_account_feed(run, refresh, reports), run.now)
     if run.args.raw:
         print(json.dumps({k: a.data for k, a in sorted(refresh.live.accounts.items())}, indent=1))
@@ -392,10 +400,10 @@ def cmd_menu_json(run: Run) -> int:
             people = run.people(reports)
             if rewritten:
                 run.write_dashboard()
-        except (JusageError, OSError) as e:
+        except Exception as e:     # anything a peer's file causes: this Mac's own meters still ship (review-security 3)
             houselog.log("error", "menu-json: shared report not updated", error=str(e), trace=traceback.format_exc())
-            share["error"] = str(e)
-            reports = None
+            share["error"] = str(e) or type(e).__name__
+            reports, people, notes = None, [], []
         if run.dashboard_path().exists():
             dashboard = str(run.dashboard_path())
     out = feed.build_feed(cfg=run.cfg, refresh=refresh, conn=run.conn(), pricing=run.pricing(), now=run.now,

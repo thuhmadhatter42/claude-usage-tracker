@@ -296,6 +296,30 @@ class LoadTests(FolderCase):
     def load(self, own="zzzz"):
         return share.load_reports(self.dir, own)
 
+    def test_one_hostile_file_skips_only_itself(self):
+        """Review-security 3: a symlink (Syncthing syncs them as links), an oversized file, or JSON
+        nested deep enough to raise RecursionError is skipped and named; the good report loads."""
+        from unittest import mock
+        self.put("Lee@lee-mac-c3d4.json", peer())
+        big = self.dir.parent / (self.dir.name + "-big.bin")
+        big.write_bytes(b"x" * 10)
+        self.addCleanup(big.unlink)
+        (self.dir / "link.json").symlink_to(big)
+        (self.dir / "huge.json").write_bytes(b" " * (share.REPORT_MAX_BYTES + 1))
+        self.put("deep.json", "[[[]]]")
+        real = json.loads
+
+        def loads(text, *a, **k):
+            if text == "[[[]]]":
+                raise RecursionError("maximum recursion depth exceeded")
+            return real(text, *a, **k)
+        with mock.patch("ju.share.json.loads", loads):
+            reports, notes = self.load()
+        self.assertEqual([r.user for r in reports], ["Lee"])
+        self.assertIn("skipped link.json: not a regular file", notes)
+        self.assertIn(f"skipped huge.json: larger than {share.REPORT_MAX_BYTES} bytes", notes)
+        self.assertIn("skipped deep.json: unreadable (RecursionError)", notes)
+
     def test_load_reports_skips_tmp_conflict_and_bad_shape(self):
         self.put("Lee@lee-mac-c3d4.json", peer())
         self.put(".Lee@lee-mac-c3d4.json.ab12.tmp", '{"half": ')

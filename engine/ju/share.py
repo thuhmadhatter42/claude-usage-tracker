@@ -12,9 +12,12 @@ A report that cannot be trusted is skipped and named in `notes`; nothing here de
 belongs to anyone else, and a missing shared folder is an error (R-119)."""
 from __future__ import annotations
 
+import errno
 import json
 import math
+import os
 import re
+import stat
 import socket
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -188,8 +191,8 @@ def write_report(directory, report: dict, cfg: Config) -> Tuple[Path, List[str]]
         if p == out or ".sync-conflict" in p.name:
             continue
         try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            raw = _read_report(p)
+        except _Skip:
             continue
         if not isinstance(raw, dict):
             continue
@@ -517,6 +520,41 @@ def _label_accounts(raw: dict) -> Tuple[List[dict], Dict[str, List[dict]]]:
     return accounts, blocks
 
 
+REPORT_MAX_BYTES = 2_000_000        # a real report is tens of kB; anything this big is not one
+
+
+class _Skip(Exception):
+    """A file in the shared folder that is not read; the text says why."""
+
+
+def _read_report(p: Path):
+    """One shared-folder file's JSON. Never follows a symlink (a synced link can point at any local
+    file), never reads more than REPORT_MAX_BYTES, and treats every parse failure, RecursionError
+    included, as this one file's problem."""
+    try:
+        fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as e:
+        raise _Skip("not a regular file" if e.errno == errno.ELOOP else f"unreadable ({type(e).__name__})") from None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise _Skip("not a regular file")
+        if st.st_size > REPORT_MAX_BYTES:
+            raise _Skip(f"larger than {REPORT_MAX_BYTES} bytes")
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            data = f.read(REPORT_MAX_BYTES + 1)
+    except OSError as e:
+        raise _Skip(f"unreadable ({type(e).__name__})") from None
+    finally:
+        os.close(fd)
+    if len(data) > REPORT_MAX_BYTES:
+        raise _Skip(f"larger than {REPORT_MAX_BYTES} bytes")
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (ValueError, RecursionError) as e:
+        raise _Skip(f"unreadable ({type(e).__name__})") from None
+
+
 def load_reports(directory, own_install: Optional[str]) -> Tuple[List[Report], List[str]]:
     """Every usable report in the shared folder except this install's own (its data comes from the
     ledger; own_install=None keeps it, for the dashboard, which shows everyone), and a note for each
@@ -537,12 +575,12 @@ def load_reports(directory, own_install: Optional[str]) -> Tuple[List[Report], L
         if ".sync-conflict" in name:
             notes.append(f"skipped {name}: sync-conflict copy")
             continue
-        if not name.endswith(".json") or not p.is_file():
+        if not name.endswith(".json"):
             continue
         try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            notes.append(f"skipped {name}: unreadable ({type(e).__name__})")
+            raw = _read_report(p)
+        except _Skip as e:
+            notes.append(f"skipped {name}: {e}")
             continue
         try:
             rep = _parse_report(name, raw)
