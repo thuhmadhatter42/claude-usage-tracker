@@ -10,6 +10,3 @@ protocol HostLog: AnyObject {
 }
 
 extension AppLog: HostLog {}
-
-/// The views' log (W3-B `PanelServices.log`) is the same `AppLog`.
-extension AppLog: HouseLog {}

@@ -8,6 +8,11 @@ enum TodayModel {
     static func accounts(feed: Feed, settings: AppSettings) -> [Feed.Account] {
         feed.accounts.filter { settings.isAccountShown($0.key) }.sorted { $0.number < $1.number }
     }
+
+    /// The account blocks the Today tab draws: none while "Claude's meters" is off (R-84).
+    static func meterBlocks(feed: Feed, settings: AppSettings) -> [Feed.Account] {
+        settings.isSectionShown(.meters) ? accounts(feed: feed, settings: settings) : []
+    }
 }
 
 struct TodayView: View {
@@ -21,7 +26,7 @@ struct TodayView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.blockGap) {
             ForEach(banners) { ErrorBanner(banner: $0, palette: palette) }
-            let accounts = TodayModel.accounts(feed: feed, settings: settings)
+            let accounts = TodayModel.meterBlocks(feed: feed, settings: settings)
             if feed.accounts.isEmpty {
                 Text(TodayModel.noAccounts).font(Layout.small).foregroundColor(palette.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -40,7 +45,7 @@ struct TodayView: View {
             if settings.isSectionShown(.models) {
                 SplitFold(feed: feed, settings: settings, time: time, palette: palette, setFold: setFold)
             }
-            if settings.isSectionShown(.projects) && !feed.projects.isEmpty {
+            if settings.isSectionShown(.projects) && !feed.projectsToday.isEmpty {
                 ProjectsFold(feed: feed, settings: settings, palette: palette, setFold: setFold)
             }
         }

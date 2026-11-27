@@ -44,14 +44,10 @@ struct TabNav: Equatable {
     }
 }
 
-/// View-level failures to the house log, once per change: a run or a feed that failed, error kinds this app does
-/// not know, peer reports that did not decode.
+/// View-level failures to the house log: error kinds this app does not know, peer reports that did not decode.
+/// A failed run is logged once, by the host (AppDelegate.runEngine), never here too (RULINGS 48d).
 enum PanelFailureLog {
-    static func runError(from old: String?, to new: String?, log: HouseLog) {
-        if let new, new != old { log.error("feed", new) }
-    }
-
-    static func feedArrived(_ feed: Feed, log: HouseLog) {
+    static func feedArrived(_ feed: Feed, log: HostLog) {
         for kind in BannerText.unknownKinds(in: feed) { log.error("feed", "unknown error kind \(kind)") }
         if feed.droppedPeople > 0 { log.error("feed", "\(feed.droppedPeople) peer report(s) did not decode and were dropped") }
     }
@@ -96,9 +92,6 @@ struct ContentView: View {
         .frame(width: Layout.width, alignment: .topLeading)
         .background(palette.colour("bg"))
         .environmentObject(services)
-        .onChange(of: model.runError) { [old = model.runError] new in
-            PanelFailureLog.runError(from: old, to: new, log: services.log)
-        }
         .onChange(of: model.feed?.generated) { _ in
             guard let feed = model.feed else { return }
             PanelFailureLog.feedArrived(feed, log: services.log)

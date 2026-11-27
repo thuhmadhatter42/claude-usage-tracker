@@ -8,7 +8,8 @@ final class SettingsViewTests: XCTestCase {
     func testOrderMatchesSpec() {
         XCTAssertEqual(SettingsRow.allCases, [
             .theme, .accent, .people, .accounts,
-            .showLabels, .showMenuBarLabels, .showWarnRunsOut, .showToday, .showModels, .showProjects, .showPeople,
+            .showMeters, .showLabels, .showMenuBarLabels, .showWarnRunsOut, .showWindows,
+            .showToday, .showModels, .showProjects, .showPeople,
             .statusLineBackup, .checkEvery, .menuBarShows, .colourByWorstMeter, .openAtLogin, .footer, .quit,
         ])
         XCTAssertEqual(SettingsRow.footerText, "Settings live on this Mac only.")

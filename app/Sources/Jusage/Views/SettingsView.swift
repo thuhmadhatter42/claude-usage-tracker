@@ -5,7 +5,8 @@ import SwiftUI
 /// engine settings (cadence, status-line backup) run the engine and show the value the next feed reports.
 enum SettingsRow: String, CaseIterable {
     case theme, accent, people, accounts
-    case showLabels, showMenuBarLabels, showWarnRunsOut, showToday, showModels, showProjects, showPeople
+    case showMeters, showLabels, showMenuBarLabels, showWarnRunsOut, showWindows
+    case showToday, showModels, showProjects, showPeople
     case statusLineBackup, checkEvery, menuBarShows, colourByWorstMeter, openAtLogin, footer, quit
 
     static let footerText = "Settings live on this Mac only."
@@ -52,19 +53,6 @@ extension MeterRowModel {
     }
 }
 
-extension RunResult {
-    /// One plain line for a run that did not succeed; nil for `.ok`.
-    var failureText: String? {
-        switch self {
-        case .ok: return nil
-        case .failed(let line, _): return line
-        case .timedOut: return FeedRunner.timeoutText
-        case .crashed(let signal): return "The engine stopped unexpectedly (signal \(signal))."
-        case .launchFailed(let why): return "The engine could not start: \(why)"
-        }
-    }
-}
-
 /// Engine settings: written only by running the engine (SCORE 1.3, RULINGS 26). A refusal shows its line under
 /// the control and goes to the house log. What the panel shows after a write it took is held until the next
 /// feed reports the engine's value.
@@ -76,10 +64,10 @@ final class EngineSettingsWriter: ObservableObject {
     @Published private(set) var statuslineSet: [String: Bool] = [:]
 
     private let run: EngineCommand
-    private let log: HouseLog
+    private let log: HostLog
     private let settings: SettingsStore
 
-    init(run: @escaping EngineCommand, log: HouseLog, settings: SettingsStore) {
+    init(run: @escaping EngineCommand, log: HostLog, settings: SettingsStore) {
         self.run = run; self.log = log; self.settings = settings
     }
 
@@ -87,7 +75,7 @@ final class EngineSettingsWriter: ObservableObject {
         let r = AppSettings.readEveryRange
         let s = min(max(seconds, r.lowerBound), r.upperBound)
         let args = ["config", "read-every", String(s)]
-        if let why = await run(args).failureText {
+        if let why = AppModel.failureText(await run(args)) {
             cadenceError = why
             log.error("settings", "\(args.joined(separator: " ")) refused: \(why)")
         } else {
@@ -99,7 +87,7 @@ final class EngineSettingsWriter: ObservableObject {
 
     func setStatusline(_ on: Bool, folder: String) async {
         let args = ["statusline", on ? "on" : "off", "--folder", folder]
-        if let why = await run(args).failureText {
+        if let why = AppModel.failureText(await run(args)) {
             statuslineErrors[folder] = why
             log.error("settings", "\(args.joined(separator: " ")) refused: \(why)")
         } else {
@@ -121,9 +109,9 @@ final class LoginItemWriter: ObservableObject {
     @Published private(set) var isOn: Bool
     @Published private(set) var error: String?
     private let control: LoginItemControl
-    private let log: HouseLog
+    private let log: HostLog
 
-    init(control: LoginItemControl, log: HouseLog) {
+    init(control: LoginItemControl, log: HostLog) {
         self.control = control; self.log = log
         isOn = control.isOn()
     }
@@ -219,13 +207,17 @@ struct SettingsView: View {
                     }
                 }
             }
-        case .showLabels:
+        case .showMeters:
             caption("Show")
+            Toggle("Claude's meters", isOn: section(.meters))
+        case .showLabels:
             Toggle("Labels", isOn: bind(\.labels))
         case .showMenuBarLabels:
             Toggle("Menu bar labels", isOn: bind(\.menuBarLabels))
         case .showWarnRunsOut:
             Toggle("Warn when the pace runs out before the reset", isOn: bind(\.warnRunsOut))
+        case .showWindows:
+            Toggle("Open 5-hour windows", isOn: section(.windows))
         case .showToday:
             Toggle("Today's totals", isOn: section(.today))
         case .showModels:

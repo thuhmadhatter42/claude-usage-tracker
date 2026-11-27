@@ -90,13 +90,28 @@ final class FoldsTests: XCTestCase {
     func testOpenWindowsModelsProjects() throws {
         let f = try Fixture.feed { j in
             j["models"] = (0..<6).map { ["id": "m\($0)", "name": "m\($0)", "tokens": 100 - $0, "usd": 1.0] }
-            j["projects"] = (0..<7).map { ["name": "p\($0)", "share": 0.1, "tokens": 10] }
+            j["projects_today"] = (0..<7).map { ["name": "p\($0)", "share": 0.1, "tokens": 10] }
         }
         let t = ViewFixture.time()
         XCTAssertEqual(DetailModel.windows(feed: f, settings: AppSettings(), time: t).map(\.line), ["sam 19:00–Fri 00:00  6.2M · $21.40"])
         XCTAssertEqual(DetailModel.models(feed: f).map(\.name), ["m0", "m1", "m2", "m3"])
         XCTAssertEqual(ProjectsModel.rows(feed: f).count, 5)
-        XCTAssertEqual(ProjectsModel.rows(feed: try Fixture.feed()).map(\.text), ["62%", "38%"])
+        XCTAssertEqual(ProjectsModel.rows(feed: try Fixture.feed()).map(\.text), ["75%", "25%"], "today's list, not the week's")
+    }
+
+    func testMetersAndWindowsSectionsGate() throws {
+        // RULINGS 48a / R-84: "Claude's meters" and "Open 5-hour windows" are Show toggles like the rest.
+        let f = try Fixture.feed()
+        var s = AppSettings()
+        let t = ViewFixture.time()
+        XCTAssertFalse(TodayModel.meterBlocks(feed: f, settings: s).isEmpty)
+        XCTAssertFalse(DetailModel.windows(feed: f, settings: s, time: t).isEmpty)
+        s.hiddenSections = [.meters, .windows]
+        XCTAssertTrue(TodayModel.meterBlocks(feed: f, settings: s).isEmpty)
+        XCTAssertTrue(DetailModel.windows(feed: f, settings: s, time: t).isEmpty)
+        XCTAssertEqual(SplitModel.rows(feed: f, settings: s), SplitModel.rows(feed: f, settings: AppSettings()),
+                       "the split rows do not follow the meters toggle")
+        XCTAssertEqual(Section.allCases, [.meters, .windows, .today, .people, .models, .projects])
     }
 
     func testFoldStateIsOpenFolds() {

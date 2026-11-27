@@ -43,7 +43,10 @@ final class FormatsTests: XCTestCase {
     }
 
     func testAgeWording() {
-        XCTAssertEqual(Fmt.age(30), "just now")
+        XCTAssertEqual(Fmt.age(40), "40 s ago")             // RULINGS 48g: seconds below a minute (J's example)
+        XCTAssertEqual(Fmt.age(0), "0 s ago")
+        XCTAssertEqual(Fmt.age(59.9), "59 s ago")
+        XCTAssertEqual(Fmt.age(60), "1 min ago")
         XCTAssertEqual(Fmt.age(23 * 60), "23 min ago")
         XCTAssertEqual(Fmt.age(7500), "2h 05m ago")
     }

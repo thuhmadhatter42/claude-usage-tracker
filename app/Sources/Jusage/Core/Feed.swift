@@ -226,7 +226,9 @@ struct Feed: Decodable {
     let totals: Totals
     let windows: [Window]
     let models: [ModelUse]
+    /// The last 7 days' projects; `projectsToday` is today's, for the panel's "Projects today" (RULINGS 48h).
     let projects: [ProjectUse]
+    let projectsToday: [ProjectUse]
     let months: [Month]
     private let peopleBox: LossyArray<Person>
     let statusline: [String: StatusLine]
@@ -239,7 +241,8 @@ struct Feed: Decodable {
     var droppedPeople: Int { peopleBox.dropped }
 
     enum CodingKeys: String, CodingKey {
-        case schema, version, generated, nextDue = "next_due", rules, me, accounts, totals, windows, models, projects, months
+        case schema, version, generated, nextDue = "next_due", rules, me, accounts, totals, windows, models, projects
+        case projectsToday = "projects_today", months
         case peopleBox = "people", statusline, dashboard, share, notes
     }
 

@@ -31,6 +31,12 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(m.feed)
     }
 
+    func testOneCopyOfFailureText() {
+        XCTAssertNil(AppModel.failureText(.ok(Data())))
+        XCTAssertEqual(AppModel.failureText(.failed(line: "jusage: x", exit: 1)), "jusage: x")
+        XCTAssertEqual(AppModel.failureText(.timedOut), FeedRunner.timeoutText)
+    }
+
     func testWrongSchemaKeepsLastGoodAndSaysSo() throws {
         let m = AppModel(now: Fixture.now)
         m.apply(.ok(try good()), now: Fixture.now)

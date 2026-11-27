@@ -249,6 +249,18 @@
    "tokens": 36480000
   }
  ],
+ "projects_today": [
+  {
+   "name": "jusage",
+   "share": 0.75,
+   "tokens": 4500000
+  },
+  {
+   "name": "subagents",
+   "share": 0.25,
+   "tokens": 1500000
+  }
+ ],
  "months": [
   {
    "key": "2026-11",

@@ -38,14 +38,20 @@ final class AppModel: ObservableObject {
             } catch {
                 runError = (error as? FeedError)?.errorDescription ?? error.localizedDescription
             }
-        case .failed(let line, _):
-            runError = line
-        case .timedOut:
-            runError = FeedRunner.timeoutText
-        case .crashed(let signal):
-            runError = "The engine stopped unexpectedly (signal \(signal))."
-        case .launchFailed(let why):
-            runError = "The engine could not start: \(why)"
+        default:
+            runError = Self.failureText(r)
+        }
+    }
+
+    /// The one plain line for an engine run that did not succeed (RULINGS 48e); nil for `.ok`. The panel and
+    /// the settings writers both read it here.
+    nonisolated static func failureText(_ r: RunResult) -> String? {
+        switch r {
+        case .ok: return nil
+        case .failed(let line, _): return line
+        case .timedOut: return FeedRunner.timeoutText
+        case .crashed(let signal): return "The engine stopped unexpectedly (signal \(signal))."
+        case .launchFailed(let why): return "The engine could not start: \(why)"
         }
     }
 

@@ -278,6 +278,21 @@ class Ledger(unittest.TestCase):
         self.assertEqual([m["name"] for m in f["models"]], ["opus-5", "sonnet-5", "unknown-9"])
         self.assertEqual(f["projects"][0]["name"], "jusage")
         self.assertEqual(f["projects"][0]["share"], 1.0)
+        self.assertEqual(f["projects_today"], f["projects"])          # all of it today
+
+    def test_projects_today_is_today_only(self):
+        """RULINGS 48h: "Projects today" reads its own list; `projects` stays the week's."""
+        s = Scenario(self)
+        from ju import ledger_scan
+        support.write_transcript(s.h.home / ".claude", [
+            {"ts": "2026-11-24T10:00:00-08:00", "model": "claude-opus-5", "input": 9000, "output": 1}], cwd="/work/old")
+        support.write_transcript(s.h.home / ".claude", [
+            {"ts": "2026-11-26T20:00:00-08:00", "model": "claude-opus-5", "input": 100, "output": 1}],
+            session="sess-2", cwd="/work/jusage")
+        ledger_scan.scan(s.conn, [s.k1])
+        f = s.build([s.block(s.k1, fresh(), "u-1")])
+        self.assertEqual([p["name"] for p in f["projects"]], ["old", "jusage"])
+        self.assertEqual([(p["name"], p["share"]) for p in f["projects_today"]], [("jusage", 1.0)])
         self.assertEqual(f["windows"][0]["account"], s.k1)
         self.assertTrue(f["windows"][0]["open"])
         self.assertEqual(len(f["months"]), 3)

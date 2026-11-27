@@ -22,7 +22,8 @@
             "week": {"tokens": 1, "usd": 1.0, "unpriced": 0}},
  "windows": [{"account": "/abs/.claude", "start": "ISO", "end": "ISO", "tokens": 1, "usd": 1.0, "open": true}],
  "models": [{"id": "claude-opus-5", "name": "opus-5", "tokens": 1, "usd": 1.0}],
- "projects": [{"name": "x", "share": 0.4, "tokens": 1}],
+ "projects": [{"name": "x", "share": 0.4, "tokens": 1}],            (the last 7 days)
+ "projects_today": [{"name": "x", "share": 0.4, "tokens": 1}],      (today: the panel's "Projects today")
  "months": [{"key": "2026-11", "label": "November", "tokens": 1, "usd": 1.0, "calls": 1,
              "types": {"input": 1, "cache_w": 1, "cache_read": 1, "output": 1}, "models": [], "projects": []}],
  "people": [{"install_id": "c3d4", "user": "Lee", "host": "mac", "generated": "ISO",

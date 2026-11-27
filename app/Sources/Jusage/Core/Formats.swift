@@ -36,10 +36,10 @@ enum Fmt {
         return "\(s / 86400)d \((s % 86400) / 3600)h"
     }
 
-    /// "23 min ago", "2h 05m ago", "1d 3h ago" (hover text for a grey number).
+    /// "40 s ago", "23 min ago", "2h 05m ago", "1d 3h ago" (hover text; seconds below a minute, RULINGS 48g).
     static func age(_ seconds: TimeInterval) -> String {
         let s = max(0, Int(seconds))
-        if s < 60 { return "just now" }
+        if s < 60 { return "\(s) s ago" }
         if s < 3600 { return "\(s / 60) min ago" }
         return countdown(TimeInterval(s)) + " ago"
     }

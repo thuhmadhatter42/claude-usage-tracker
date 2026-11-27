@@ -217,7 +217,7 @@ def walk(o):
 
 class FeedFixtureTests(unittest.TestCase):
     TOP = ["schema", "version", "generated", "next_due", "rules", "me", "accounts", "totals", "windows",
-           "models", "projects", "months", "people", "statusline", "dashboard", "share", "notes"]
+           "models", "projects", "projects_today", "months", "people", "statusline", "dashboard", "share", "notes"]
     ACCOUNT = ["key", "number", "email", "uuid", "folders", "weekly_reset", "flags", "warning", "error",
                "no_session_meter", "meters", "session_share", "missing_people"]
     METER = ["id", "name", "pct", "resets_at", "read_at", "source", "period_s", "disagree", "pace", "split"]

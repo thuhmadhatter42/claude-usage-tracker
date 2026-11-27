@@ -37,7 +37,8 @@ enum DetailModel {
 
     /// Open 5-hour windows on shown accounts: "sam 19:00–00:00  6.2M · $21.40".
     static func windows(feed: Feed, settings: AppSettings, time: DisplayTime) -> [ValueRow] {
-        feed.windows.filter(\.open).compactMap { w in
+        guard settings.isSectionShown(.windows) else { return [] }     // "Open 5-hour windows" off (R-84)
+        return feed.windows.filter(\.open).compactMap { w in
             let owner = feed.accounts.first { $0.key == w.account || $0.folders.contains(w.account) }
             if let owner, !settings.isAccountShown(owner.key) { return nil }
             let name = owner.map { AccountBlockModel.localPart($0.email) } ?? w.account

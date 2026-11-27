@@ -347,6 +347,7 @@ def build_feed(*, cfg, refresh: RefreshResult, conn, pricing, now: datetime, ver
         "windows": _windows(conn, pricing, now),
         "models": _models(ledger_query.top_models(conn, pricing, week_from, day, None)),
         "projects": _projects(ledger_query.top_projects(conn, pricing, week_from, day, None)),
+        "projects_today": _projects(ledger_query.top_projects(conn, pricing, day, day, None)),
         "months": _months(conn, pricing),
         "people": list(people),
         "statusline": statusline_block(cfg, refresh, seen),

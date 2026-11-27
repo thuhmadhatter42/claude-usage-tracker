@@ -4,8 +4,10 @@ import Combine
 /// S5: the app's settings, one typed record (R-145, R-146, R-148). Keys are folder keys and install ids, never
 /// emails or first names. Stored as JSON under `settings.v2` in the app's UserDefaults (bundle id unchanged).
 
+/// The panel's Show toggles that hide a whole part (R-84, RULINGS 48a): Claude's meters (the account blocks),
+/// open 5-hour windows, today's totals, other people, busiest models, busiest projects.
 enum Section: String, Codable, CaseIterable {
-    case today, people, models, projects
+    case meters, windows, today, people, models, projects
 }
 
 typealias FoldId = String
