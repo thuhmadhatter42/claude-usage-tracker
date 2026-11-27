@@ -14,7 +14,7 @@ var JDash = (function () {
 
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
   function logErr(msg, e) {
-    var g = (0, eval)('this');
+    var g = globalThis;            // never eval: the page's CSP has no 'unsafe-eval'
     if (g.clientErr) g.clientErr.report('dash', msg + (e ? ': ' + (e.message || e) : ''));
   }
 
@@ -126,7 +126,7 @@ var JDash = (function () {
   function store(fn, fallback) { try { return fn(); } catch (e) { logErr('localStorage', e); return fallback; } }
 
   function wire(doc, data) {
-    var g = (0, eval)('this');
+    var g = globalThis;            // never eval: the page's CSP has no 'unsafe-eval'
     var hour12 = store(function () { return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).resolvedOptions().hour12 === true; }, false);
     var cfg = doc.getElementById('cfg');
 
