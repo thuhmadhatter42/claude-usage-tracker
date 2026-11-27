@@ -271,7 +271,10 @@ def _read_group(members: List[str], acc: AccountLive, others: Dict[str, int], no
         anchor = acc.reset_anchor
         weekly = next((m.resets_at for m in parsed.meters if m.id == "weekly" and m.resets_at), None)
         if weekly is not None:
-            anchor, verdict = deps.observe(acc.reset_anchor, weekly, others)
+            # A hashed item is bound to its folder and the uuid check passed, so another account's
+            # minute proves nothing: the reading counts toward relearning (two accounts may share a
+            # reset). The foreign check guards only what names no account: the legacy item.
+            anchor, verdict = deps.observe(acc.reset_anchor, weekly, others if login.legacy else {})
             if verdict == "reject_foreign":
                 deps.log("warn", "reading rejected: weekly reset matches another account", folder=folder,
                          minute_of_week=minute_of_week(weekly))

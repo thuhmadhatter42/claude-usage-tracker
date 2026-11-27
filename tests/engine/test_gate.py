@@ -16,7 +16,7 @@ from pathlib import Path
 
 from tests.engine import support
 from tests.engine.test_live_store import FakeIO, METER_LOG_DDL
-from ju import gate, timeutil
+from ju import gate, identity, timeutil
 from ju.contracts import (HttpError, IdentityRejected, Login, LoginError, Meter, NetworkError, RateLimited,
                           ReplyChanged)
 from ju.live_store import AccountLive, ErrorInfo, LiveStore
@@ -366,27 +366,49 @@ class TestRefresh(RefreshCase):
         self.assertEqual(acc.fetched, T0)
         self.assertEqual(s2.rows("SELECT COUNT(*) FROM meter_log")[0][0], 2)   # only the first reading
 
-    def test_foreign_reset_rejected(self):
+    def test_foreign_reset_rejected_for_the_legacy_item(self):
+        """R-14 on a reading from the unsuffixed item (it names no account): a weekly reset that is
+        another account's learned minute is that account's reading."""
+        leg = str(self.home.home / ".claude-legacy")
         seen = {}
 
         def observe(anchor, weekly_reset, others):
             seen["others"], seen["weekly_reset"] = others, weekly_reset
-            if weekly_reset == timeutil.parse_iso("2026-11-27T09:00:00+00:00"):
-                return dict(anchor, candidate=1), "reject_foreign"
-            return anchor, "accept"
+            return identity.observe(anchor, weekly_reset, others)
 
         anchor_b = {"minute_of_week": 6300, "confirmations": 2, "candidate": None, "candidate_count": 0}  # 09:00 Fri
         LiveStore(self.io.store_io()).save(self.state, gate_live({self.b: fresh(at=T0, reset_anchor=anchor_b)}))
-        s = Script(self.io, self.state, logins={self.a: "ta", self.b: "tb"}, uuids={self.a: ["u1"], self.b: ["u2"]},
+        s = Script(self.io, self.state, logins={leg: "ta", self.b: "tb"}, uuids={leg: ["u1"], self.b: ["u2"]},
                    replies={"ta": [reply(40, weekly_reset="2026-11-27T09:00:00+00:00")]}, observe=observe)
-        res = gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
-        acc = res.live.account(self.a)
+        res = gate.refresh(self.state, [leg, self.b], manual=False, deps=s.deps())
+        acc = res.live.account(leg)
         self.assertEqual(acc.error.kind, "identity_foreign_reset")
         self.assertIsNone(acc.data)
-        self.assertEqual(acc.reset_anchor["candidate"], 1)    # E12's anchor update is kept
-        self.assertEqual(seen["others"], {self.b: 6300})
+        self.assertEqual(acc.reset_anchor, identity.new_anchor())   # a rejected legacy reading teaches nothing
         self.assertEqual(acc.error.other, self.b)             # RULING 31: the matched account is named
         self.assertEqual(s.fetched_tokens, ["ta"])            # b was fresh: not fetched
+
+    def test_same_reset_as_another_account_never_locks_a_hashed_item_out(self):
+        """Review-engine 3: two accounts whose weekly resets coincide (a global reset moves both).
+        A hashed item's reading passed the uuid check, so it is accepted and relearns the minute."""
+        anchor_a = {"minute_of_week": identity.timeutil.minute_of_week(timeutil.parse_iso("2026-11-28T18:00:00+00:00")),
+                    "confirmations": 5, "candidate": None, "candidate_count": 0}
+        anchor_b = {"minute_of_week": 6300, "confirmations": 2, "candidate": None, "candidate_count": 0}
+        LiveStore(self.io.store_io()).save(self.state, gate_live({
+            self.a: fresh(at=T0 - timedelta(hours=1), reset_anchor=anchor_a),
+            self.b: fresh(at=T0, reset_anchor=anchor_b)}))
+        same = "2026-11-27T09:00:00+00:00"
+        s = Script(self.io, self.state, logins={self.a: "ta", self.b: "tb"}, uuids={self.a: ["u1"], self.b: ["u2"]},
+                   replies={"ta": [reply(40, weekly_reset=same), reply(41, weekly_reset=same)],
+                            "tb": [reply(10, weekly_reset=same)]},
+                   observe=identity.observe)
+        res = gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
+        self.assertIsNone(res.live.account(self.a).error)
+        self.assertEqual(res.live.account(self.a).data, reply(40, weekly_reset=same))
+        s.clock[0] = T0 + timedelta(seconds=60)
+        res = gate.refresh(self.state, [self.a, self.b], manual=False, deps=s.deps())
+        self.assertIsNone(res.live.account(self.a).error)
+        self.assertEqual(res.live.account(self.a).reset_anchor["minute_of_week"], 6300)   # relearned
 
     def test_two_folders_one_uuid_single_block(self):
         old = fresh(at=T0 - timedelta(minutes=30))
