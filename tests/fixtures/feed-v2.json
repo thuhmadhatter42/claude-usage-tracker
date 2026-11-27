@@ -299,11 +299,15 @@
    "generated": "2026-11-26T21:38:00-08:00",
    "today": {
     "tokens": 5200000,
-    "usd": 18.0
+    "usd": 18.0,
+    "calls": 120,
+    "unpriced": 0
    },
    "week": {
     "tokens": 31000000,
-    "usd": 168.2
+    "usd": 168.2,
+    "calls": 610,
+    "unpriced": 0
    },
    "accounts": [
     {

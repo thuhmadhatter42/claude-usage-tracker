@@ -189,6 +189,59 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(len(srv.requests), 1, "RULING 29: the service is read once its reading is 10 min old")
 
+    # ------------------------------------------------------------------ menu-json -> the golden feed
+
+    def assert_same_shape(self, got, gold, path="feed"):
+        """Same keys in the same order at every object; lists compared by their first element; an object
+        keyed by data (statusline: folder keys) compared by its values; null on either side not compared."""
+        if got is None or gold is None:
+            return
+        if isinstance(gold, dict):
+            self.assertIsInstance(got, dict, path)
+            if path.endswith(".statusline"):
+                for k, v in got.items():
+                    self.assert_same_shape(v, next(iter(gold.values())), f"{path}[{k}]")
+                return
+            self.assertEqual(list(got), list(gold), path)
+            for k in gold:
+                self.assert_same_shape(got[k], gold[k], f"{path}.{k}")
+        elif isinstance(gold, list):
+            self.assertIsInstance(got, list, path)
+            if got and gold:
+                self.assert_same_shape(got[0], gold[0], f"{path}[0]")
+        elif isinstance(gold, bool):
+            self.assertIsInstance(got, bool, path)
+        elif isinstance(gold, (int, float)):
+            self.assertIsInstance(got, (int, float), path)
+            self.assertNotIsInstance(got, bool, path)
+        else:
+            self.assertIsInstance(got, type(gold), path)
+
+    def test_menu_json_has_the_golden_feed_shape(self):
+        from tests.engine.test_dash_fixtures import report_dict
+        self.account()
+        self.transcript(tokens=500)
+        reports = self.h.home / "shared"
+        reports.mkdir()
+        peer = report_dict(user="Lee", host="lee-mac", install_id="c3d4", gen_ago_s=60)
+        peer["generated"] = timeutil.iso(timeutil.now() - timedelta(minutes=1))
+        (reports / "Lee@lee-mac-c3d4.json").write_text(json.dumps(peer))
+        r1 = reply(37, 52)
+        r1["limits"].append({"kind": "weekly_scoped", "percent": 18, "resets_at": r1["limits"][1]["resets_at"],
+                             "scope": {"model": {"display_name": "Fable 5"}}})
+        with support.FakeUsageServer([(200, {}, r1)]) as srv:
+            share = self.engine("share", "--reports", str(reports), "--user", "Sam", url=srv.url)
+            self.assertEqual(share.returncode, 0, share.stderr)
+            r = self.engine("menu-json", url=srv.url)
+            self.assertEqual(len(srv.requests), 1, "menu-json inside the cadence reads nothing new")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "")
+        feed = json.loads(r.stdout)
+        gold = support.load_fixture("feed-v2.json")
+        self.assertEqual(feed["people"][0]["user"], "Lee", "a peer report reaches the feed")
+        self.assertTrue(feed["accounts"][0]["meters"], "the account has meters")
+        self.assert_same_shape(feed, gold)
+
     # ------------------------------------------------------------------ RULING 50
 
     def test_share_on_a_mac_with_no_claude_account(self):

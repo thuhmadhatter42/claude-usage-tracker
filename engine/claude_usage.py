@@ -268,16 +268,17 @@ class Run:
     # ------------------------------------------------ E20 adapter (sharing)
 
     def own_windows(self, uuid: Optional[str]) -> List[dict]:
-        """This Mac's 5-hour windows of the last 8 days for the folders logged into `uuid`, priced:
-        [{"start", "end", "usd"}] with aware datetimes (what E20 prorates a split from)."""
+        """This Mac's 5-hour windows of the last 8 days for the folders logged into `uuid`, priced, in the
+        report's block shape E20's meter_split reads: [{"start": ISO, "end": ISO, "usd"}]."""
         folders = [k for k in self.keys if (accounts.read_identity(k, self.cfg) or (None, None))[1] == uuid]
         since = (self.now.astimezone().date() - timedelta(days=8)).isoformat()
         p = self.pricing()
         out = []
         for k in folders:
             for b in ledger_query.blocks(ledger_query.rows(self.conn(), since, k)):
-                out.append({"start": b.start, "end": b.end, "usd": ledger_query.sum_rows(b.rows, p).cost})
-        return sorted(out, key=lambda w: w["start"])
+                out.append({"start": timeutil.iso(b.start), "end": timeutil.iso(b.end),
+                            "usd": ledger_query.sum_rows(b.rows, p).cost})
+        return sorted(out, key=lambda w: timeutil.parse_iso(w["start"]))
 
     def report_parts(self, refresh: gate.RefreshResult) -> Tuple[Dict[str, dict], Dict[str, dict]]:
         """(live, session_share) for the report, both keyed by account uuid (RULING 21): live is each
