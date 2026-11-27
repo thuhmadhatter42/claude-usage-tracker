@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panelWindow: Panel!
     private var panel: PanelController!
     private var observers: Observers!
+    private var resizeWatcher: ContentResizeWatcher?
     private var scheduler: Scheduler?
     private var loginItem: LoginItem!
     private var subscriptions: Set<AnyCancellable> = []
@@ -68,6 +69,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                   self.panel.replaceIfShown()
                               })
         observers.start()
+
+        resizeWatcher = ContentResizeWatcher(
+            changes: model.objectWillChange.merge(with: settings.objectWillChange).eraseToAnyPublisher(),
+            replace: { [unowned self] in self.panel.replaceIfShown() })
 
         model.objectWillChange.merge(with: settings.objectWillChange)
             .receive(on: RunLoop.main)
