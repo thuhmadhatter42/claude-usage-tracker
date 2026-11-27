@@ -444,17 +444,19 @@ def _near_minute(a: int, b: int) -> bool:
 
 
 def backup_reading(acc, cap: Optional[Mapping], others: Mapping[str, int], now: datetime,
-                   *, key: Optional[str] = None) -> Tuple[Optional["Reading"], str]:
+                   *, key: Optional[str] = None, primary: bool = False) -> Tuple[Optional["Reading"], str]:
     """The status-line capture as a Reading, or (None, reason).
 
-    Only while the service read is failing or gated; capture younger than 15 minutes; every
+    `primary` (RULING 28: the account's backup is on, so an accepted capture IS its reading) drops
+    the first condition; every other check stays. Otherwise only while the service read is failing
+    or gated. Capture younger than 15 minutes; every
     percentage 0..101; the capture's folder is this account's (`key`); and the weekly reset
     falls within 120 s of this account's LEARNED weekly reset. A reset matching another
     account's learned minute (`others`: folder key -> minute) is that account's data (#68772).
     Session and weekly only: the status line has no per-model window."""
     from ju import constants
     failing = acc.error is not None or (acc.blocked_until is not None and acc.blocked_until > now)
-    if not failing:
+    if not failing and not primary:
         return None, "the usage service reading is fine; the status line is not needed"
     if cap is None:
         return None, "no status-line capture for this account"

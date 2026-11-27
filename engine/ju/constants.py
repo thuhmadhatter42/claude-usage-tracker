@@ -26,6 +26,7 @@ BACKOFF_S = (300, 600, 1200, 1800)
 RETRY_AFTER_CAP_S = 3600
 JITTER = 0.20
 MANUAL_FLOOR_S = 15
+SERVICE_REFRESH_S = 600     # RULING 29: a status-line reading still reads the service this often (per-model weeklies)
 
 # Timeouts
 KEYCHAIN_TIMEOUT_S = 30

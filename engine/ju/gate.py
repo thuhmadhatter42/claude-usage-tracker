@@ -24,11 +24,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .constants import (BACKOFF_S, JITTER, MANUAL_FLOOR_S, READ_EVERY_MAX, READ_EVERY_MIN, RETRY_AFTER_CAP_S)
+from .constants import (BACKOFF_S, JITTER, MANUAL_FLOOR_S, READ_EVERY_MAX, READ_EVERY_MIN, RETRY_AFTER_CAP_S,
+                        SERVICE_REFRESH_S)
 from .contracts import (ERROR_KINDS, GateDecision, JusageError, Login, LoginError, Meter, RateLimited, Reading)
 from .live_store import AccountLive, ErrorInfo, Live, LiveStore, log_meters
 from . import identity
-from .timeutil import minute_of_week
+from .timeutil import minute_of_week, parse_iso
 
 LOCK_NAME = "fetch.lock"
 LOCK_TIMEOUT_S = 120
@@ -81,10 +82,15 @@ class RefreshResult:
 
 # ------------------------------------------------------------------ pure rules
 
+_CAPTURED = ("session", "weekly")      # the meters a status-line capture carries
+
+
 def due(acc: AccountLive, read_every_s: int, now: datetime, manual: bool,
-        meters: Sequence[Meter]) -> GateDecision:
+        meters: Sequence[Meter], service_at: Optional[datetime] = None) -> GateDecision:
     """May this folder be read now? `meters` = the parsed meters of `acc.data` (empty if none).
-    next_at = the earliest moment it becomes due (None when due now)."""
+    next_at = the earliest moment it becomes due (None when due now). `service_at` = the newest
+    usage-service reading in meter_log: a stored status-line reading (RULING 28) carrying per-model
+    meters is due once that is SERVICE_REFRESH_S old (RULING 29), so those never grey."""
     if not READ_EVERY_MIN <= read_every_s <= READ_EVERY_MAX:
         raise ValueError(f"read_every_s {read_every_s} outside {READ_EVERY_MIN}-{READ_EVERY_MAX}")
     blocked = acc.blocked_until is not None and now < acc.blocked_until
@@ -103,7 +109,14 @@ def due(acc: AccountLive, read_every_s: int, now: datetime, manual: bool,
     cadence_at = acc.fetched + timedelta(seconds=read_every_s)
     if now >= cadence_at:
         return GateDecision(True, "cadence", None)
-    nxt = min([cadence_at] + resets[:1])
+    service_due = []
+    if acc.source == "statusline" and any(m.id not in _CAPTURED for m in meters):
+        if service_at is None:
+            return GateDecision(True, "per_model", None)
+        service_due = [service_at + timedelta(seconds=SERVICE_REFRESH_S)]
+        if now >= service_due[0]:
+            return GateDecision(True, "per_model", None)
+    nxt = min([cadence_at] + resets[:1] + service_due)
     if acc.blocked_until is not None:
         nxt = max(nxt, acc.blocked_until)
     return GateDecision(False, "cadence", nxt)
@@ -181,7 +194,9 @@ def _refresh_locked(state: Path, accounts: List[str], manual: bool, deps: GateDe
             cur = _current_key(live, members)
             acc = live.account(cur)
             now = deps.now()
-            if not due(acc, deps.read_every_s, now, manual, _meters(acc, deps)).due:
+            if conn is None and acc.source == "statusline":
+                conn = deps.open_db(state)
+            if not due(acc, deps.read_every_s, now, manual, _meters(acc, deps), _service_at(conn, members)).due:
                 continue
             others = {}
             for _, other, _ in groups:
@@ -210,7 +225,7 @@ def _refresh_locked(state: Path, accounts: List[str], manual: bool, deps: GateDe
         cur = _current_key(live, members)
         blocks.append(AccountBlock(cur, members, uuid, live.account(cur)))
     return RefreshResult(live=live, accounts=blocks, fetched=fetched,
-                         next_due=_next_due(live, groups, deps))
+                         next_due=_next_due(state, live, groups, deps))
 
 
 def _read_group(members: List[str], acc: AccountLive, others: Dict[str, int], now: datetime,
@@ -295,13 +310,32 @@ def _meters(acc: AccountLive, deps: GateDeps) -> List[Meter]:
     return list(deps.parse(acc.data).meters) if acc.data is not None else []
 
 
-def _next_due(live: Live, groups, deps: GateDeps) -> datetime:
+def _service_at(conn, members: List[str]) -> Optional[datetime]:
+    """The newest usage-service reading of any member in meter_log (None without a connection: only a
+    status-line reading needs it, and only then is the database opened)."""
+    if conn is None:
+        return None
+    marks = ",".join("?" * len(members))
+    # the newest row by insertion (ts strings carry different offsets, so MAX(ts) would compare text)
+    row = conn.execute(f"SELECT ts FROM meter_log WHERE source = 'service' AND account IN ({marks}) "
+                       "ORDER BY rowid DESC LIMIT 1", list(members)).fetchone()
+    return parse_iso(row[0]) if row else None
+
+
+def _next_due(state: Path, live: Live, groups, deps: GateDeps) -> datetime:
     now = deps.now()
     if not groups:
         return now + timedelta(seconds=deps.read_every_s)
     times = []
-    for _, members, _ in groups:
-        acc = live.account(_current_key(live, members))
-        d = due(acc, deps.read_every_s, now, False, _meters(acc, deps))
-        times.append(now if d.due else d.next_at)
+    conn = None
+    try:
+        for _, members, _ in groups:
+            acc = live.account(_current_key(live, members))
+            if conn is None and acc.source == "statusline":
+                conn = deps.open_db(state)
+            d = due(acc, deps.read_every_s, now, False, _meters(acc, deps), _service_at(conn, members))
+            times.append(now if d.due else d.next_at)
+    finally:
+        if conn is not None:
+            conn.close()
     return min(times)

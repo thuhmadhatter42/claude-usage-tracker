@@ -168,7 +168,8 @@ class MenuJson(Base):
             return Reading(self.k1, timeutil.parse_iso(capture["captured_at"]),
                            [Meter("session", "Session", 44.0, resets, 18000)], [], "u-1", "statusline"), None
 
-        self.stand_in("ju.statusline", backup_reading=backup_reading, disagree=lambda s, c: False)
+        self.stand_in("ju.statusline", backup_reading=backup_reading, disagree=lambda s, c: False,
+                      capture_to_reading=lambda cap, uuid: cap)
         rc, out, err = self.main("menu-json")
         self.assertEqual(rc, 0, err)
         a = json.loads(out)["accounts"][0]
@@ -200,7 +201,8 @@ class StatuslinePrimary(Base):
         resets = timeutil.now() + timedelta(hours=2)
         weekly = timeutil.now() + timedelta(days=3)
 
-        def backup_reading(acc, cap, others, now, key=None):
+        def backup_reading(acc, cap, others, now, key=None, primary=False):
+            self.assertTrue(primary, "RULING 28: captures land as the primary reading, not as a stand-in")
             self.judged.append(key)
             if not accept:
                 return None, "weekly reset matches another account"
@@ -208,7 +210,8 @@ class StatuslinePrimary(Base):
             return Reading(key, at, [Meter("session", "Session", float(cap["pct"]), resets, 18000),
                                      Meter("weekly", "Weekly", 60.0, weekly, 604800)], [], "u-1", "statusline"), None
 
-        self.stand_in("ju.statusline", backup_reading=backup_reading, disagree=lambda s, c: False)
+        self.stand_in("ju.statusline", backup_reading=backup_reading, disagree=lambda s, c: False,
+                      capture_to_reading=lambda cap, uuid: cap)
 
     def backup_on(self, on=True):
         from ju.config import ConfigStore

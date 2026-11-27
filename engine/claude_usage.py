@@ -205,7 +205,7 @@ class Run:
                 others = {k: live.account(k).reset_anchor["minute_of_week"] for k in self.keys
                           if k != key and (uuids[k] is None or uuids[k] != uuids[key])
                           and live.account(k).reset_anchor["minute_of_week"] is not None}
-                reading, reason = sl.backup_reading(acc, cap, others, self.now, key=key)
+                reading, reason = sl.backup_reading(acc, cap, others, self.now, key=key, primary=True)
                 if reading is None:
                     houselog.log("info", "status-line capture rejected", folder=key, reason=reason)
                     continue
@@ -255,7 +255,12 @@ class Run:
                 return feed.StatuslineView(None, None, frozenset(), at)
             service = Reading(folder=block.key, fetched=acc.fetched, meters=list(usage_client.parse(acc.data).meters),
                               flags=[], uuid=acc.identity_uuid, source="service")
-            differ = frozenset(feed.STATUSLINE_METERS) if sl.disagree(service, capture) else frozenset()
+            try:
+                cap_reading = sl.capture_to_reading(capture, acc.identity_uuid)
+            except JusageError as e:
+                houselog.log("error", "status-line capture damaged; not compared", folder=block.key, why=str(e))
+                return feed.StatuslineView(None, None, frozenset(), at)
+            differ = frozenset(feed.STATUSLINE_METERS) if sl.disagree(service, cap_reading) else frozenset()
             return feed.StatuslineView(None, None, differ, at)
 
         return view

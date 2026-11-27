@@ -176,10 +176,14 @@ class LiveStore:
 
 def log_meters(conn: sqlite3.Connection, key: str, reading: Reading) -> None:
     """One meter_log row per meter of a successful reading (R-35). resets_at is rounded to the
-    minute: the service's reset time drifts sub-second, and readings of one period must match."""
+    minute: the service's reset time drifts sub-second, and readings of one period must match.
+    `ts` is whole seconds, so a status-line capture and a service read can share one: the service
+    row is kept either way (the per-model age, RULING 29, is measured from it)."""
     ts = iso(reading.fetched)
     conn.executemany(
-        "INSERT INTO meter_log (ts, account, meter, pct, resets_at, source) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO meter_log (ts, account, meter, pct, resets_at, source) VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (ts, account, meter) DO UPDATE SET pct = excluded.pct, resets_at = excluded.resets_at, "
+        "source = excluded.source WHERE excluded.source = 'service'",
         [(ts, key, m.id, float(m.pct), iso(_round_minute(m.resets_at)) if m.resets_at else None, reading.source)
          for m in reading.meters])
     conn.commit()

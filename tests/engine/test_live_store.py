@@ -209,6 +209,19 @@ class TestLiveStore(LiveStoreCase):
         nothing = AccountLive(error=ErrorInfo("login_missing", "No login", now))
         self.assertFalse(nothing.is_stale(now))   # no data: an error, not a stale number
 
+    def test_meter_log_same_second_service_wins(self):
+        """A status-line capture and a service read in the same second (ts is whole seconds) never fail the
+        run: the service row is kept either way, since it is what the per-model age is measured from."""
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(METER_LOG_DDL)
+        m = lambda pct: [Meter("session", "Session", pct, T0 + timedelta(hours=2), 18000)]
+        cap = Reading(folder=self.a, fetched=T0, flags=[], uuid="u", source="statusline", meters=m(41.0))
+        svc = Reading(folder=self.a, fetched=T0.replace(microsecond=500000), flags=[], uuid="u", source="service", meters=m(40.0))
+        live_store.log_meters(conn, self.a, cap)
+        live_store.log_meters(conn, self.a, svc)
+        live_store.log_meters(conn, self.a, cap)
+        self.assertEqual(conn.execute("SELECT pct, source FROM meter_log").fetchall(), [(40.0, "service")])
+
     def test_meter_log_period_by_minute(self):
         conn = sqlite3.connect(":memory:")
         conn.executescript(METER_LOG_DDL)

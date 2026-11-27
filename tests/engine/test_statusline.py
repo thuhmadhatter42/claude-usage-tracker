@@ -371,6 +371,23 @@ class BackupTests(Base):
         self.assertIsNone(r)
         self.assertIn("service", why)
 
+    def test_primary_capture_accepted_while_the_service_is_healthy(self):
+        """RULING 28: with the backup on, an accepted capture is the reading even when the service is fine;
+        every identity check still applies."""
+        acc = AccountLive(fetched=NOW - timedelta(minutes=5), data={"x": 1}, reset_anchor=self.failing().reset_anchor,
+                          identity_uuid="u-1")
+        r, why = statusline.backup_reading(acc, self.capture_doc(), {}, NOW, key=self.key, primary=True)
+        self.assertIsNotNone(r, why)
+        self.assertEqual(r.source, "statusline")
+        mine = timeutil.minute_of_week(WEEK_RESET)
+        r, why = statusline.backup_reading(acc, self.capture_doc(), {"/other": mine}, NOW, key=self.key, primary=True)
+        self.assertIsNotNone(r, "own learned minute wins")
+        odd = WEEK_RESET + timedelta(hours=7)
+        r, why = statusline.backup_reading(acc, self.capture_doc(week_reset=odd), {}, NOW, key=self.key, primary=True)
+        self.assertIsNone(r)
+        r, why = statusline.backup_reading(acc, self.capture_doc(folder="/elsewhere"), {}, NOW, key=self.key, primary=True)
+        self.assertIsNone(r)
+
     def test_foreign_reading_68772_ignored(self):
         mine = timeutil.minute_of_week(WEEK_RESET)
         other_reset = WEEK_RESET + timedelta(days=1, hours=3)

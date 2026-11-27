@@ -123,6 +123,72 @@ class EndToEnd(unittest.TestCase):
                 bad.append(p)
         self.assertEqual(bad, [], "the engine reached a real Claude folder, Keychain or install")
 
+    # ------------------------------------------------------------------ RULINGS 28/29
+
+    def statusline_setup(self, service_age_s):
+        """One account whose last service reading is `service_age_s` old (weekly reset learned, a per-model
+        weekly in the reply), the backup switched on through the CLI, then Claude Code's status line run
+        exactly as settings.json now says, with a fresh capture on stdin. Returns the capture's numbers."""
+        key = self.account()
+        folder = self.h.home / ".claude"
+        (folder / "settings.json").write_text(json.dumps({"statusLine": {"type": "command", "command": "echo mine"}}))
+        now = datetime.now(timezone.utc)
+        weekly = (now + timedelta(days=3)).replace(second=0, microsecond=0)
+        session_reset = (now + timedelta(hours=2)).replace(microsecond=0)
+        at = now - timedelta(seconds=service_age_s)
+        data = {"limits": [{"kind": "session", "percent": 30, "resets_at": session_reset.isoformat()},
+                           {"kind": "weekly_all", "percent": 50, "resets_at": weekly.isoformat()},
+                           {"kind": "weekly_scoped", "percent": 18, "resets_at": weekly.isoformat(),
+                            "scope": {"model": {"display_name": "Fable 5"}}}]}
+        mow = timeutil.minute_of_week(weekly)
+        (self.h.state / "live.json").write_text(json.dumps({"schema": 2, "accounts": {key: {
+            "fetched": at.isoformat(), "data": data, "error": None, "warning": None, "source": "service",
+            "blocked_until": None, "backoff_step": 0, "retry_after_explicit": False, "last_manual": None,
+            "reset_anchor": {"minute_of_week": mow, "confirmations": 3, "candidate": None, "candidate_count": 0},
+            "identity_uuid": "u-1"}}}))
+        from ju import ledger_db
+        from ju.contracts import Meter, Reading
+        from ju.live_store import log_meters
+        conn = ledger_db.open_db(self.h.state, [key])
+        log_meters(conn, key, Reading(key, at, [Meter("weekly:fable", "Weekly · Fable", 18.0, weekly, 604800)],
+                                      [], "u-1", "service"))
+        conn.close()
+        self.assertEqual(self.engine("config", "python", sys.executable).returncode, 0)
+        r = self.engine("statusline", "on", "--folder", key)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        command = json.loads((folder / "settings.json").read_text())["statusLine"]["command"]
+        self.assertIn(" -B -E -s ", command)
+        stdin = json.dumps({"transcript_path": str(folder / "projects" / "-work" / "s.jsonl"),
+                            "model": {"display_name": "never stored"},
+                            "rate_limits": {"five_hour": {"used_percentage": 41, "resets_at": session_reset.isoformat()},
+                                            "seven_day": {"used_percentage": 53, "resets_at": weekly.isoformat()}}})
+        cc = subprocess.run(["/bin/bash", "-c", command], input=stdin, capture_output=True, text=True, timeout=30,
+                            env={"HOME": str(self.h.home), "PATH": "/usr/bin:/bin"})
+        self.assertEqual((cc.returncode, cc.stdout.strip()), (0, "mine"), cc.stderr)     # the user's own line, untouched
+        return key
+
+    def test_fresh_capture_is_the_reading_and_the_endpoint_is_not_called(self):
+        key = self.statusline_setup(service_age_s=120)
+        with support.FakeUsageServer([]) as srv:
+            r = self.engine("menu-json", url=srv.url)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(srv.requests, [], "an accepted capture means no endpoint call (RULING 28)")
+        feed = json.loads(r.stdout)
+        meters = {m["id"]: m for m in feed["accounts"][0]["meters"]}
+        self.assertEqual((meters["session"]["pct"], meters["session"]["source"]), (41.0, "statusline"))
+        self.assertEqual((meters["weekly"]["pct"], meters["weekly"]["source"]), (53.0, "statusline"))
+        self.assertEqual(meters["weekly:fable"]["source"], "service")
+        self.assertIsNotNone(meters["weekly:fable"]["pace"]["state"], "the per-model weekly is not grey")
+        cap = (self.h.state / "statusline").glob("*.json")
+        self.assertNotIn("never stored", "".join(p.read_text() for p in cap))
+
+    def test_per_model_weekly_reads_the_service_at_10_minutes(self):
+        self.statusline_setup(service_age_s=600)
+        with support.FakeUsageServer([(200, {}, reply(30, 50))]) as srv:
+            r = self.engine("menu-json", url=srv.url)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(len(srv.requests), 1, "RULING 29: the service is read once its reading is 10 min old")
+
     # ------------------------------------------------------------------ RULING 50
 
     def test_share_on_a_mac_with_no_claude_account(self):

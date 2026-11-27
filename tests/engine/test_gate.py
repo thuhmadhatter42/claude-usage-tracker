@@ -61,6 +61,25 @@ class TestDue(unittest.TestCase):
         old = [Meter("session", "Session", 50.0, T0 - timedelta(seconds=5), 18000)]
         self.assertFalse(gate.due(acc, 600, T0 + timedelta(seconds=30), False, old).due)
 
+    def test_statusline_reading_still_reads_the_service_every_10_minutes(self):
+        """RULING 29: while captures feed session and weekly, the per-model weeklies come only from the
+        service, so a status-line reading is due once the last service reading is 10 minutes old."""
+        reset = T0 + timedelta(days=3)
+        per_model = [Meter("session", "Session", 10.0, reset, 18000), Meter("weekly", "Weekly", 20.0, reset, 604800),
+                     Meter("weekly:fable", "Weekly · Fable", 5.0, reset, 604800)]
+        acc = fresh(source="statusline")
+        service_at = T0 - timedelta(seconds=540)                    # 9 min before the capture
+        d = gate.due(acc, 600, T0 + timedelta(seconds=59), False, per_model, service_at=service_at)
+        self.assertFalse(d.due)
+        self.assertEqual(d.next_at, service_at + timedelta(seconds=600))
+        d = gate.due(acc, 600, service_at + timedelta(seconds=600), False, per_model, service_at=service_at)
+        self.assertEqual((d.due, d.reason), (True, "per_model"))
+        self.assertTrue(gate.due(acc, 600, T0, False, per_model, service_at=None).due, "never read from the service")
+        # no per-model meter: the capture covers everything, cadence alone decides
+        self.assertFalse(gate.due(acc, 600, T0 + timedelta(seconds=59), False, per_model[:2], service_at=None).due)
+        # a service reading is never held to this rule
+        self.assertFalse(gate.due(fresh(), 600, T0 + timedelta(seconds=59), False, per_model, service_at=None).due)
+
     def test_reset_passed_never_beats_block(self):
         acc = gate.on_429(fresh(), 120, T0, lambda: 0.0)
         meters = [Meter("session", "Session", 50.0, T0 + timedelta(seconds=5), 18000)]
