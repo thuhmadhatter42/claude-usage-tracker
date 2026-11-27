@@ -60,7 +60,7 @@ enum JusageDoctor {
         HouseDoctor.appChecks = [engineCheck(run: engine), updatesCheck(bundle: bundle)]
     }
 
-    /// The real engine runner: `python -E -s <script> doctor` through FeedRunner (90 s cap shortened to 30 s),
+    /// The real engine runner: `python -B -E -s <script> doctor` through FeedRunner (90 s cap shortened to 30 s),
     /// the verdict lines of its output. Blocking: Doctor's checks run in a row on the main thread.
     static func engineRunner(python: URL, script: URL, stateDir: String?, timeout: TimeInterval = 30) -> () throws -> [String] {
         {

@@ -1,5 +1,5 @@
 # E16: the status-line wrapper. Run by Claude Code as
-#     <python> -E -s <engine>/jusage-statusline -- <original command>
+#     <python> -B -E -s <engine>/jusage-statusline -- <original command>
 # Reads Claude Code's JSON once, saves the rate limits (E15), then runs the original command with
 # the same input and hands back its stdout, stderr and exit code untouched. A capture problem is
 # logged and never changes what the person sees. No original command: print nothing, exit 0.

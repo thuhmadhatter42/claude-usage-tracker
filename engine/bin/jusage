@@ -48,7 +48,7 @@ engine() {
         echo "The recorded Python ($py) is gone. Open jusage once so it records Python again." >&2
         exit 1
     fi
-    "$py" -E -s "$CU" "$@"
+    "$py" -B -E -s "$CU" "$@"
 }
 
 in_app() {              # the engine ships inside jusage.app/Contents/Resources/engine

@@ -166,7 +166,7 @@ class OnOffTests(Base):
         self.assertEqual(cur["statusLine"]["padding"], 2)
         self.assertEqual(cur["statusLine"]["command"], wrapped)
         self.assertIn("jusage-statusline", wrapped)
-        self.assertTrue(wrapped.startswith(f"{self.python} -E -s "))
+        self.assertTrue(wrapped.startswith(f"{self.python} -B -E -s "))     # RULINGS 51: -B, no .pyc
         rec = ConfigStore.load(self.state).statusline[self.key]
         self.assertEqual(rec["original"], ORIGINAL)
         self.assertTrue(rec["enabled"])

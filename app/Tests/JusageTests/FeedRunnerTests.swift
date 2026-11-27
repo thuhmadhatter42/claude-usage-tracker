@@ -8,9 +8,10 @@ final class FeedRunnerTests: XCTestCase {
     override func setUpWithError() throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("jusage-runner-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        // A stand-in for `python -E -s <script> ...`: drops the two flags and runs the script with sh.
+        // A stand-in for `python -B -E -s <script> ...` (RULINGS 51: no .pyc inside the sealed app): it refuses
+        // any other flags (exit 9), drops the three and runs the script with sh.
         python = dir.appendingPathComponent("fake-python")
-        try "#!/bin/sh\nshift 2\ns=\"$1\"; shift\nexec /bin/sh \"$s\" \"$@\"\n".write(to: python, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\n[ \"$1 $2 $3\" = \"-B -E -s\" ] || { echo \"flags: $1 $2 $3\" >&2; exit 9; }\nshift 3\ns=\"$1\"; shift\nexec /bin/sh \"$s\" \"$@\"\n".write(to: python, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: python.path)
     }
 

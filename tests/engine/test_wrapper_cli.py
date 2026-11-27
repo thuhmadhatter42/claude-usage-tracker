@@ -18,7 +18,7 @@ WRAPPER = ROOT / "engine" / "bin" / "jusage"
 
 STUB = """#!/bin/bash
 printf '%s\\n' "$*" >> "{log}"
-if [ "$4 $5" = "config get" ]; then printf '%s\\n' "${{STUB_REPORTS:-}}"; fi
+if [ "$5 $6" = "config get" ]; then printf '%s\\n' "${{STUB_REPORTS:-}}"; fi
 exit 0
 """
 
@@ -48,8 +48,8 @@ class Wrapper(unittest.TestCase):
         cu = str(ROOT / "engine" / "claude_usage.py")
         out = []
         for line in self.log.read_text().splitlines():
-            self.assertTrue(line.startswith(f"-E -s {cu}"), line)
-            out.append(line[len(f"-E -s {cu}"):].strip())
+            self.assertTrue(line.startswith(f"-B -E -s {cu}"), line)          # RULINGS 51: -B, no .pyc
+            out.append(line[len(f"-B -E -s {cu}"):].strip())
         return out
 
     def test_help_is_usage_function(self):

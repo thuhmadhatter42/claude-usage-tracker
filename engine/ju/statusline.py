@@ -317,7 +317,7 @@ def _set_record(cfg, key: str, rec: dict) -> None:
 def _wrapped(python: str, engine_dir, original: Optional[str]) -> str:
     import shlex
     from pathlib import Path
-    head = f"{shlex.quote(python)} -E -s {shlex.quote(str(Path(engine_dir) / WRAPPER_NAME))} --"
+    head = f"{shlex.quote(python)} -B -E -s {shlex.quote(str(Path(engine_dir) / WRAPPER_NAME))} --"
     return head if original is None else f"{head} {shlex.quote(original)}"
 
 

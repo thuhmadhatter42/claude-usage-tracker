@@ -62,3 +62,12 @@ final class AppLogTests: XCTestCase {
         XCTAssertFalse(log.stem.contains(" "))
     }
 }
+
+/// RULINGS 46: the log folder follows the running bundle id, so a `.dev` build never writes the release log.
+final class DevLogFolderTests: XCTestCase {
+    func testDevBuildLogsToItsOwnFolder() {
+        XCTAssertEqual(House.logFolder(for: "com.goatdguild.jusage.dev"), "jusage-dev")
+        XCTAssertEqual(House.logFolder(for: "com.goatdguild.jusage"), "jusage")
+        XCTAssertEqual(House.logFolder(for: nil), "jusage")
+    }
+}

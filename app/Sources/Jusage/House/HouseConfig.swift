@@ -13,7 +13,12 @@ enum House {
     ///   an internal app (J only) -> "js-claude@agentmail.to"
     static let reportTo = "contact@fourletterrecords.com"
     /// The folder name under ~/Library/Logs (and the log file's stem, lower-cased).      CHANGE if not appName
-    static let logFolder = appName
+    /// It follows the running bundle id: a `.dev` build logs to `<appName>-dev`, never the release log (RULINGS 46).
+    static var logFolder: String { logFolder(for: Bundle.main.bundleIdentifier) }
+
+    static func logFolder(for bundleID: String?) -> String {
+        (bundleID ?? "").hasSuffix(".dev") ? appName + "-dev" : appName
+    }
     /// Environment variable that points the log somewhere else (tests, a second copy).   CHANGE
     static let logDirEnv = "JUSAGE_LOG_DIR"
     /// Who made it, on the About panel.
