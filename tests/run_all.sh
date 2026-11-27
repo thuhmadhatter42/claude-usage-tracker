@@ -49,10 +49,7 @@ if [ -f tests/js/run.js ]; then
 fi
 
 if [ -d app/Sources/Jusage ] && [ -n "$(find app/Sources/Jusage -type f ! -name .keep -print -quit)" ]; then
-    if [ -d app/Sources/Jusage/Core ] && [ ! -f app/Sources/Jusage/Host/main.swift ]; then
-        # RULINGS 25: the app target cannot link before Host/main.swift (wave 3). Removed at the wave-3 merge.
-        echo "== swift =="; echo "-- swift: waiting for Host/main.swift (wave 3)"
-    elif command -v swift > /dev/null 2>&1; then
+    if command -v swift > /dev/null 2>&1; then
         suite swift bash -c 'cd app && swift test --scratch-path "${TMPDIR:-/tmp}/jusage-swift"'
     else
         echo "== swift =="; echo "-- swift: swift not found, but app/Sources/Jusage has sources"; failed+=("swift (swift not found)")
