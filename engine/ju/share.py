@@ -479,11 +479,18 @@ class Person:
                 "accounts": self.accounts}
 
 
+RUNS_OUT_PEER_TEXT = "At this pace you hit the limit before the reset."
+
+
 def _strip_runs_out(block: dict) -> dict:
+    """A peer's forecast is theirs to time (the runs-out clock is never shown for someone else's
+    meter), so `runs_out` goes, and words that held its `{runs_out}` placeholder say it without one."""
     b = json.loads(json.dumps(block))
     for m in b.get("meters") or []:
         if isinstance(m, dict) and isinstance(m.get("pace"), dict):
             m["pace"].pop("runs_out", None)
+            if "{runs_out}" in str(m["pace"].get("words", "")):
+                m["pace"]["words"] = RUNS_OUT_PEER_TEXT
     return b
 
 

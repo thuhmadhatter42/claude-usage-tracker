@@ -435,6 +435,16 @@ class PeopleTests(FolderCase):
         meter = p.accounts[0]["meters"][0]
         self.assertNotIn("runs_out", meter["pace"])
         self.assertEqual(meter["pace"]["state"], "green")
+
+    def test_peer_words_lose_the_runs_out_placeholder(self):
+        """Review-engine 9: with runs_out removed, no `{runs_out}` may be left for the app to show."""
+        live = {UUID_A: {"number": 1, "uuid": UUID_A, "meters": [
+            {"id": "weekly", "pct": 80.0, "pace": {"state": "amber", "runs_out": "2026-11-27T10:00:00+00:00", "e": 0.4,
+                                                   "words": "At this pace you hit the limit {runs_out}, 2h 05m before the reset."}}]}}
+        p = share.people(self.load(**{"Lee@m-c3d4.json": peer(live=live)}), NOW)[0]
+        words = p.accounts[0]["meters"][0]["pace"]["words"]
+        self.assertNotIn("{runs_out}", words)
+        self.assertEqual(words, "At this pace you hit the limit before the reset.")
         self.assertEqual(live[UUID_A]["meters"][0]["pace"]["runs_out"], "2026-11-27T10:00:00+00:00")  # input untouched
 
     def test_newest_report_speaks_for_an_account(self):
