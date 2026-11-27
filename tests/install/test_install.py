@@ -33,8 +33,8 @@ if sys.argv[1:3] == ["config", "get"]:
 """
 
 
-def fake_dmg(version=h.VERSION, recorder=False) -> Path:
-    key = (version, recorder)
+def fake_dmg(version=h.VERSION, recorder=False, bundle_id=h.APP_ID) -> Path:
+    key = (version, recorder, bundle_id)
     if key in _DMG and _DMG[key].exists():
         return _DMG[key]
     d = h.scratch()
@@ -43,7 +43,7 @@ def fake_dmg(version=h.VERSION, recorder=False) -> Path:
     (app / "Resources").mkdir(parents=True)
     (app / "MacOS").mkdir()
     with open(app / "Info.plist", "wb") as f:
-        plistlib.dump({"CFBundleIdentifier": h.APP_ID, "CFBundleExecutable": "Jusage",
+        plistlib.dump({"CFBundleIdentifier": bundle_id, "CFBundleExecutable": "Jusage",
                        "CFBundleShortVersionString": version, "LSMinimumSystemVersion": "13.0"}, f)
     (app / "MacOS" / "Jusage").write_text("#!/bin/sh\n")
     shutil.copytree(h.ROOT / "engine", app / "Resources" / "engine", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -77,6 +77,12 @@ class Installer(unittest.TestCase):
         h.write_exe(self.stubs / "pgrep", "#!/bin/bash\nexit 1\n")
         h.write_exe(self.stubs / "xcode-select", "#!/bin/bash\n[ \"$1\" = \"-p\" ] && { echo /Library/Developer/CommandLineTools; exit 0; }\nexit 0\n")
         h.write_exe(self.stubs / "sw_vers", "#!/bin/bash\n[ \"$1\" = \"-productVersion\" ] && { echo 14.5; exit 0; }\nexec /usr/bin/sw_vers \"$@\"\n")
+
+        self.addCleanup(self.no_disk_image_left_attached)
+
+    def no_disk_image_left_attached(self):
+        info = subprocess.run(["hdiutil", "info"], capture_output=True, text=True).stdout
+        self.assertNotIn(str(self.tmp), info, "install.sh left its disk image attached")
 
     def env(self, **extra):
         base = {"JUSAGE_APPS_DIR": str(self.apps), "JUSAGE_TRASH": str(self.stubs / "trash"),
@@ -264,28 +270,13 @@ class TestDownloadInstall(Installer):
         self.nothing_installed()
 
     def test_wrong_bundle_id_refused(self):
-        host = fake_dmg()
-        d = h.scratch()
-        # a DMG whose app has another bundle id
-        src = d / "src"
-        shutil.copytree(self._mount_copy(host), src)
-        with open(src / "jusage.app" / "Contents" / "Info.plist", "wb") as f:
-            plistlib.dump({"CFBundleIdentifier": "com.example.other", "CFBundleShortVersionString": "1.0.0", "LSMinimumSystemVersion": "13.0"}, f)
-        (d / "host").mkdir()
-        subprocess.run(["hdiutil", "create", "-quiet", "-volname", "jusage", "-srcfolder", str(src), "-format", "UDZO", str(d / "host" / "jusage-latest.dmg")], check=True)
-        rc, out = self.install(JUSAGE_DOWNLOAD_BASE="file://" + str(d / "host"))
+        # Built straight from a source folder: mounting the good DMG to copy it raced the disk-image
+        # daemon in the full suite and left attached images behind.
+        host = fake_dmg(bundle_id="com.example.other")
+        rc, out = self.install(JUSAGE_DOWNLOAD_BASE="file://" + str(host))
         self.assertEqual(rc, 1)
         self.assertIn("bundle id", out)
         self.nothing_installed()
-
-    def _mount_copy(self, host):
-        mnt = h.scratch() / "mnt"
-        mnt.mkdir()
-        subprocess.run(["hdiutil", "attach", "-quiet", "-nobrowse", "-readonly", "-mountpoint", str(mnt), str(host / "jusage-latest.dmg")], check=True)
-        dst = h.scratch() / "copy"
-        shutil.copytree(mnt, dst, symlinks=True, ignore=shutil.ignore_patterns(".fseventsd", ".Trashes", ".DS_Store", ".Spotlight-V100"))
-        subprocess.run(["hdiutil", "detach", "-quiet", str(mnt)], check=True)
-        return dst
 
 
 class TestFromSource(Installer):
