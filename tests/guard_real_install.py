@@ -5,6 +5,10 @@ under each guarded path (files, folders, links; lstat, never followed) is record
 mode and mtime in nanoseconds, so a test that rewrites one file deep inside the app is caught even when
 no folder mtime moves. A guarded path that is absent is recorded as absent; appearing later is a change.
 
+Ignored (noise, never a change): any entry named .DS_Store anywhere, and <guarded>/.git/worktrees and
+everything under it (git's admin dir for linked worktrees; any git status/log in a worktree touches it).
+Nothing else is ignored.
+
 Guarded paths: JUSAGE_GUARD_PATHS (colon-separated, for the harness's own tests), else
 /Applications/jusage.app and ~/jusage, where ~ is the account's real home from the user database, never
 $HOME (the suites run with temp homes).
@@ -33,6 +37,13 @@ def _raise(err):
     raise err
 
 
+def ignored(root, path):
+    if os.path.basename(path) == ".DS_Store":
+        return True
+    wt = os.path.join(root, ".git", "worktrees")
+    return path == wt or path.startswith(wt + os.sep)
+
+
 def snapshot(roots):
     seen = {}
     for root in roots:
@@ -43,9 +54,11 @@ def snapshot(roots):
         if not stat.S_ISDIR(os.lstat(root).st_mode):
             continue
         for d, dirs, files in os.walk(root, onerror=_raise):
+            dirs[:] = [n for n in dirs if not ignored(root, os.path.join(d, n))]
             for name in dirs + files:
                 p = os.path.join(d, name)
-                seen[p] = entry(p)
+                if not ignored(root, p):
+                    seen[p] = entry(p)
     return seen
 
 
