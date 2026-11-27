@@ -183,7 +183,7 @@ counted as zero. Each session's share of the week is shown too: "This session: 4
 
 ## Themes and what's on screen
 
-`themes.json` holds the themes (System, Paper, Graphite, Console, Midnight, Sand, Mono) for both the
+`engine/themes.json` holds the themes (System, Paper, Graphite, Console, Midnight, Sand, Mono) for both the
 app and the dashboard. The dashboard's **Customize** button picks a theme and shows or hides people,
 accounts, sections and single charts; it is saved in that browser only. Each Mac writes its own
 `~/.claude-usage/dashboard.html` from the shared reports folder. Add a theme by adding a block to

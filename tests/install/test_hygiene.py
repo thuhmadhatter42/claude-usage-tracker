@@ -86,5 +86,32 @@ class Hygiene(unittest.TestCase):
         self.assertEqual(bad, [])
 
 
+
+class Legacy(unittest.TestCase):
+    """Review-security 5: the 0.1.39 engine, dashboard and menu bar app (replaced by engine/,
+    engine/ju/dash/ and app/ per SCORE) are gone, so a 0.1.x `jusage upgrade` finds no menubar/
+    to build and copy over /Applications. Root `jusage` stays only as a shim to the 0.2.0 command,
+    so the `alias jusage=` an 0.1.x install wrote keeps working."""
+
+    def test_replaced_0_1_files_are_not_tracked(self):
+        names = subprocess.run(["git", "-C", str(ROOT), "ls-files"], check=True,
+                               capture_output=True, text=True).stdout.splitlines()
+        gone = ("claude_usage.py", "dashboard.py", "pricing.json", "themes.json")
+        self.assertEqual([n for n in names if n in gone or n.startswith("menubar/")], [])
+
+    def test_root_jusage_is_a_shim_to_the_engine_command(self):
+        text = (ROOT / "jusage").read_text()
+        code = [l for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+        self.assertEqual(code, ['exec "$(cd -P "$(/usr/bin/dirname "${BASH_SOURCE[0]}")" && pwd)/engine/bin/jusage" "$@"'])
+        for word in ("ditto", "menubar", "/Applications", "build.sh", "git"):
+            self.assertNotIn(word, "\n".join(code))
+        with tempfile.TemporaryDirectory() as home:
+            env = {"HOME": home, "PATH": "/usr/bin:/bin"}
+            via_shim = subprocess.run(["bash", str(ROOT / "jusage"), "help"], capture_output=True, text=True, env=env)
+            direct = subprocess.run(["bash", str(ROOT / "engine" / "bin" / "jusage"), "help"], capture_output=True,
+                                    text=True, env=env)
+        self.assertEqual(via_shim.stdout.splitlines()[:3], direct.stdout.splitlines()[:3])
+        self.assertTrue(via_shim.stdout.startswith("jusage: Claude Code usage"), via_shim.stdout + via_shim.stderr)
+
 if __name__ == "__main__":
     unittest.main()
