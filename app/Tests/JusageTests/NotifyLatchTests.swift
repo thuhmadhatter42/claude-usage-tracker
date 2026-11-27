@@ -141,4 +141,28 @@ final class NotifyLatchTests: XCTestCase {
         XCTAssertTrue(notes.isEmpty)
         latch = [:]
     }
+
+    func testMeterWithNoResetTimeStillWarnsOnceAndNeverNotesAReset() throws {
+        func nilReset(_ pct: Double) throws -> Feed {
+            try Fixture.feed { j in
+                var accounts = j["accounts"] as! [[String: Any]]
+                var meters = accounts[0]["meters"] as! [[String: Any]]
+                meters[1]["pct"] = pct
+                meters[1]["resets_at"] = NSNull()
+                meters[1]["read_at"] = "2026-11-26T21:39:00-08:00"
+                var pace = meters[1]["pace"] as! [String: Any]
+                pace["runs_out"] = NSNull(); pace["state"] = "green"
+                meters[1]["pace"] = pace
+                accounts[0]["meters"] = meters
+                j["accounts"] = accounts
+            }
+        }
+        var (notes, latch) = eval(try nilReset(81), Latch())
+        XCTAssertEqual(notes.map(\.kind), [.warn80])
+        XCTAssertFalse(notes[0].body.contains("resets"), notes[0].body)
+        (notes, latch) = eval(try nilReset(82), latch)
+        XCTAssertTrue(notes.isEmpty, "once per cycle")
+        (notes, _) = eval(try nilReset(10), latch)
+        XCTAssertTrue(notes.isEmpty, "no cycle key, so no reset note")
+    }
 }

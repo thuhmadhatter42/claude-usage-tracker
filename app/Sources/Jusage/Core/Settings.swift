@@ -81,7 +81,7 @@ private struct LatchCodingKey: CodingKey {
 
 struct LatchState: Codable, Equatable {
     /// The meter's reset time when this latch was last set; a different cycle starts when it moves far enough.
-    var cycleResetsAt: Date
+    var cycleResetsAt: Date?
     /// True while the condition has fired and not yet recovered.
     var fired: Bool
     /// True once anything fired in this cycle (decides whether a reset is worth a notification).
@@ -210,7 +210,7 @@ final class SettingsStore: ObservableObject {
         var s = settings
         var dropped: [String] = []
 
-        let byEmail = Dictionary(feed.accounts.map { ($0.email, $0.key) }, uniquingKeysWith: { a, _ in a })
+        let byEmail = Dictionary(feed.accounts.compactMap { a in a.email.map { ($0, a.key) } }, uniquingKeysWith: { a, _ in a })
         let allPeople = feed.people.map { ($0.user, $0.installId) } + [(feed.me.user, feed.me.installId)]
         let byName = Dictionary(allPeople, uniquingKeysWith: { a, _ in a })
 

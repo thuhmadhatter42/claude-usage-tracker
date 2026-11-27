@@ -120,4 +120,22 @@ final class MeterRowTests: XCTestCase {
         XCTAssertEqual(row(try Fixture.feed(), account: 1, meter: "session").voiceOver,
                        "Session, 98 percent used, grey, not current, resets 23:00.")
     }
+
+    func testMeterWithNoResetTimeRendersWithoutResetText() throws {
+        let f = try ViewFixture.feed(account: 0, meter: 0) { m in
+            m["resets_at"] = NSNull()
+            var p = m["pace"] as! [String: Any]
+            p["state"] = NSNull(); p["forecast"] = false; p["landing"] = NSNull()
+            m["pace"] = p
+        }
+        let r = row(f, meter: "session")
+        XCTAssertEqual(r.countdown, "\u{2014}")
+        XCTAssertEqual(r.pctText, "37%")
+        XCTAssertFalse(r.hover.contains("Resets "), r.hover)
+        XCTAssertFalse(r.voiceOver.contains("resets"), r.voiceOver)
+        XCTAssertNil(r.runsOut)
+        let t = TitleModel.make(feed: f, settings: AppSettings(), now: Fixture.now, hour12: false, timeZone: ViewFixture.tz)
+        XCTAssertEqual(t[0].text, "37%")
+        XCTAssertFalse(t[0].hover.contains("resets"), t[0].hover)
+    }
 }

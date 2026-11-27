@@ -44,7 +44,11 @@ enum NotifyLatch {
 
                 // New cycle? Compare with the cycle the latch last saw.
                 let known = NotifyKind.allCases.compactMap { next[key($0)] }
-                let newCycle = known.first.map { abs(m.resetsAt.timeIntervalSince($0.cycleResetsAt)) >= tolerance } ?? false
+                // No reset time (or none recorded) = no cycle key: never a new cycle, so never a reset note.
+                let newCycle: Bool = {
+                    guard let at = m.resetsAt, let was = known.first?.cycleResetsAt else { return false }
+                    return abs(at.timeIntervalSince(was)) >= tolerance
+                }()
                 var firedBefore = false
                 if newCycle {
                     firedBefore = known.contains { $0.firedThisCycle }
@@ -58,7 +62,7 @@ enum NotifyLatch {
                     notes.append(Note(id: "\(a.key)-\(m.id)-\(k.rawValue)", kind: k, folderKey: a.key, meterId: m.id,
                                       title: title, body: body))
                 }
-                let resets = Fmt.clock(m.resetsAt, now: now, hour12: hour12, timeZone: timeZone)
+                let resets = m.resetsAt.map { Fmt.clock($0, now: now, hour12: hour12, timeZone: timeZone) }
                 let pct = TitleModel.pctText(m.pct)
 
                 // Conditions now.
@@ -69,7 +73,7 @@ enum NotifyLatch {
                 // Re-arm anything that recovered; a held condition keeps its latch.
                 func settle(_ k: NotifyKind, holds: Bool) {
                     var s = state(k)
-                    s.cycleResetsAt = m.resetsAt
+                    s.cycleResetsAt = m.resetsAt ?? s.cycleResetsAt
                     if !holds { s.fired = false }
                     else if !s.fired { s.fired = true; s.firedThisCycle = true }
                     next[key(k)] = s
@@ -79,23 +83,23 @@ enum NotifyLatch {
                 let runsWasFired = state(.runsOut).fired
 
                 if red && !redWasFired {
-                    note(.critical, "\(m.name) is at \(pct)", "\(a.email): wrap up your sessions and save state. Resets \(resets).")
+                    note(.critical, "\(m.name) is at \(pct)", "\(a.identity): wrap up your sessions and save state.\(resets.map { " Resets \($0)." } ?? "")")
                 }
                 if warn && !red && !warnWasFired {
-                    note(.warn80, "\(m.name) is at \(pct)", "\(a.email): resets \(resets).")
+                    note(.warn80, "\(m.name) is at \(pct)", "\(a.identity)\(resets.map { ": resets \($0)." } ?? ".")")
                 }
                 if runsOut && !runsWasFired, let at = m.pace.runsOut {
                     note(.runsOut, "\(m.name) will run out before the reset",
-                         "\(a.email): at this pace it runs out \(Fmt.clock(at, now: now, hour12: hour12, timeZone: timeZone)); it resets \(resets).")
+                         "\(a.identity): at this pace it runs out \(Fmt.clock(at, now: now, hour12: hour12, timeZone: timeZone))\(resets.map { "; it resets \($0)." } ?? ".")")
                 }
                 settle(.critical, holds: red)
                 settle(.warn80, holds: warn)   // latched silently when the red line already spoke
                 settle(.runsOut, holds: runsOut)
                 if newCycle && firedBefore {
-                    note(.reset, "\(m.name) has reset", "\(a.email): back to \(pct). Next reset \(resets).")
+                    note(.reset, "\(m.name) has reset", "\(a.identity): back to \(pct).\(resets.map { " Next reset \($0)." } ?? "")")
                 }
                 var rs = state(.reset)
-                rs.cycleResetsAt = m.resetsAt
+                rs.cycleResetsAt = m.resetsAt ?? rs.cycleResetsAt
                 next[key(.reset)] = rs
             }
         }

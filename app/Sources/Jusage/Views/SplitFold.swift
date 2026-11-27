@@ -19,7 +19,7 @@ enum SplitModel {
         TodayModel.accounts(feed: feed, settings: settings).flatMap { a in
             MeterRowModel.ordered(a.meters).compactMap { m -> SplitRow? in
                 guard let split = m.split else { return nil }
-                return SplitRow(id: "\(a.key)|\(m.id)", title: "\(AccountBlockModel.localPart(a.email)) · \(m.name)",
+                return SplitRow(id: "\(a.key)|\(m.id)", title: "\(a.label) · \(m.name)",
                                 text: text(split.parts, me: feed.me.installId))
             }
         }
@@ -41,7 +41,7 @@ enum DetailModel {
         return feed.windows.filter(\.open).compactMap { w in
             let owner = feed.accounts.first { $0.key == w.account || $0.folders.contains(w.account) }
             if let owner, !settings.isAccountShown(owner.key) { return nil }
-            let name = owner.map { AccountBlockModel.localPart($0.email) } ?? w.account
+            let name = owner.map { $0.label } ?? w.account
             return ValueRow(id: "\(w.account)|\(w.start.timeIntervalSince1970)",
                             name: "\(name) \(time.clock(w.start))–\(time.clock(w.end))",
                             text: "\(Fmt.tokens(w.tokens)) · \(Fmt.usd(w.usd))")

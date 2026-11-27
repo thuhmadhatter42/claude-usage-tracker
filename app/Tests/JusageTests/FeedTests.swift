@@ -164,6 +164,51 @@ final class FeedTests: XCTestCase {
         XCTAssertTrue(f.accounts[0].meters[0].pace.resetDue)
     }
 
+    func testMeterWithNoResetTimeDecodesAndTheFeedSurvives() throws {
+        let f = try ViewFixture.feed(account: 0, meter: 0) { $0["resets_at"] = NSNull() }
+        XCTAssertNil(f.accounts[0].meters[0].resetsAt)
+        XCTAssertNotNil(f.accounts[0].meters[1].resetsAt)
+        XCTAssertEqual(f.accounts.count, 2)
+    }
+
+    func testPeerMeterWithNoResetKeepsThePerson() throws {
+        let f = try Fixture.feed { j in
+            var people = j["people"] as! [[String: Any]]
+            var accounts = people[0]["accounts"] as! [[String: Any]]
+            var meters = accounts[0]["meters"] as! [[String: Any]]
+            meters[0]["resets_at"] = NSNull()
+            accounts[0]["meters"] = meters
+            people[0]["accounts"] = accounts
+            j["people"] = people
+        }
+        XCTAssertEqual(f.people.count, 1)
+        XCTAssertEqual(f.droppedPeople, 0)
+    }
+
+    func testAccountWithNoLoginIdentityDecodes() throws {
+        let f = try ViewFixture.feed { a in
+            a[1]["email"] = NSNull()
+            a[1]["uuid"] = NSNull()
+        }
+        XCTAssertNil(f.accounts[1].email)
+        XCTAssertNil(f.accounts[1].uuid)
+        XCTAssertEqual(f.accounts.count, 2)
+    }
+
+    func testPeerWithNoFoldersAndANonPathKeyStillDecodes() throws {
+        let f = try Fixture.feed { j in
+            var people = j["people"] as! [[String: Any]]
+            var accounts = people[0]["accounts"] as! [[String: Any]]
+            accounts[0]["key"] = "acct:11111111-2222-3333-4444-555555555555"
+            accounts[0]["folders"] = [String]()
+            people[0]["accounts"] = accounts
+            j["people"] = people
+        }
+        XCTAssertEqual(f.people.count, 1)
+        XCTAssertEqual(f.people[0].accounts[0].key, "acct:11111111-2222-3333-4444-555555555555")
+        XCTAssertEqual(f.people[0].accounts[0].folders, [])
+    }
+
     func testZAndOffsetAreTheSameInstant() throws {
         XCTAssertEqual(try ISO.parse("2026-11-27T05:40:00Z"), try ISO.parse("2026-11-26T21:40:00-08:00"))
     }

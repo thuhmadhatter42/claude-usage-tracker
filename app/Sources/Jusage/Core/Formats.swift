@@ -72,7 +72,8 @@ enum Fmt {
 
     /// The reset countdown for a meter; once the reset has passed, the R-42 wording, never "0h 00m".
     static func resetText(meter: Feed.Meter, now: Date) -> String {
-        let left = meter.resetsAt.timeIntervalSince(now)
+        guard let resetsAt = meter.resetsAt else { return "\u{2014}" }
+        let left = resetsAt.timeIntervalSince(now)
         return left <= 0 ? resetDueText : countdown(left)
     }
 

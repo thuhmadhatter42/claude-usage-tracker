@@ -28,7 +28,7 @@ enum BannerText {
         guard let feed else { return out }
         for a in TodayModel.accounts(feed: feed, settings: settings) {
             guard let e = a.error else { continue }
-            let label = AccountBlockModel.localPart(a.email)
+            let label = a.label
             let text = Staleness.reasons[e.kind] == nil
                 ? "\(label): \(e.text)"
                 : line(kind: e.kind, until: e.until, label: label, time: time)
