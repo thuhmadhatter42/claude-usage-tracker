@@ -313,6 +313,23 @@ struct Pace {
     var state: State { pct >= 95 || wallFirst || (projected ?? 0) >= 100 ? .wall : (projected ?? 0) >= 80 ? .ahead : .calm }
 }
 func color(_ s: Pace.State, _ th: Theme) -> Color { s == .wall ? th.hot : s == .ahead ? th.warn : th.ok }
+/// Hover text for a meter row: what each part of the bar is, with this meter's own numbers, and why it is this colour.
+func explain(_ p: Pace, _ name: String) -> String {
+    let span = name == "five_hour" ? "5-hour window" : "week"
+    var l = [String(format: "Solid bar: %.0f%% of this limit used.", p.pct)]
+    if let pr = p.projected, pr > p.pct { l.append(String(format: "Faint bar behind it: where you land by the reset at this pace (%.0f%%).", pr)) }
+    if let e = p.elapsed { l.append(String(format: "White tick: %.0f%% of the %@ has gone. Solid left of the tick = under pace.", e * 100, span)) }
+    if let r = p.reset { l.append("Resets \(clock(r)).") }
+    switch p.state {
+    case .wall:
+        if p.pct >= 95 { l.append("Red: 95% or more used.") }
+        else if p.wallFirst, let w = p.wall { l.append("Red: at this pace you hit the limit \(clock(w)), before the reset.") }
+        else { l.append("Red: this pace reaches 100% before the reset.") }
+    case .ahead: l.append("Yellow: this pace lands at 80–99% by the reset.")
+    case .calm: l.append("Green: this pace stays under 80% by the reset.")
+    }
+    return l.joined(separator: "\n")
+}
 /// Time to the event, departure-board style: "2h 14m", "5d 21h", "due".
 func countdown(_ d: Date?) -> String {
     guard let d else { return "" }
@@ -360,8 +377,9 @@ struct MeterLine: View {
                 Text(String(format: "%.0f%%", meter.pct)).font(.callout.weight(.semibold)).monospacedDigit()
                     .foregroundStyle(pace.state == .calm ? (th.ink ?? .primary) : color(pace.state, th)).frame(width: 38, alignment: .trailing)
                 Text(countdown(pace.reset)).font(.caption).monospacedDigit().foregroundStyle(.secondary).frame(width: 48, alignment: .trailing)
-                    .help(pace.reset.map { "resets " + clock($0) } ?? "")
             }
+            .contentShape(Rectangle())
+            .help(explain(pace, meter.name))
             if forecast, pace.wallFirst, let w = pace.wall {
                 Text("runs out \(clock(w)) · resets \(pace.reset.map(clock) ?? "")")
                     .font(.caption2).monospacedDigit().foregroundStyle(th.hot)
