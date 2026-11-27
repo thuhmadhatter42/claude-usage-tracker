@@ -241,6 +241,20 @@ class TestLiveStore(LiveStoreCase):
         live_store.log_meters(conn, self.a, cap)
         self.assertEqual(conn.execute("SELECT pct, source FROM meter_log").fetchall(), [(40.0, "service")])
 
+    def test_meter_log_keeps_35_days(self):
+        """Review-engine 8: meter_log is pruned as it is written; only the weekly period (session
+        share) and the newest service row (per-model age) are ever read, so 35 days is plenty."""
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(METER_LOG_DDL)
+        pst = timezone(timedelta(hours=-8))
+        old = (T0 - timedelta(days=37)).astimezone(pst)
+        kept = (T0 - timedelta(days=30)).astimezone(pst)
+        conn.executemany("INSERT INTO meter_log (ts, account, meter, pct, resets_at, source) VALUES (?,?,?,?,?,'service')",
+                         [(timeutil.iso(old), self.a, "weekly", 1.0, None), (timeutil.iso(kept), self.a, "weekly", 2.0, None)])
+        live_store.log_meters(conn, self.a, Reading(self.a, T0, [Meter("weekly", "Weekly", 3.0, None, 604800)],
+                                                    [], None, "service"))
+        self.assertEqual([r[0] for r in conn.execute("SELECT pct FROM meter_log ORDER BY pct")], [2.0, 3.0])
+
     def test_meter_log_period_by_minute(self):
         conn = sqlite3.connect(":memory:")
         conn.executescript(METER_LOG_DDL)

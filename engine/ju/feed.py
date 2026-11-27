@@ -25,7 +25,7 @@ from ju import accounts, config, formats, fsutil, ledger_query, pace as pace_mod
 from ju.constants import FEED_SCHEMA, RED_AT, SESSION_S, STALE_AFTER_S, WARMUP_E, WEEK_S
 from ju.contracts import Meter, Reading
 from ju.gate import AccountBlock, RefreshResult
-from ju.live_store import AccountLive
+from ju.live_store import AccountLive, ts_floor
 
 STATUSLINE_METERS = ("session", "weekly")      # R-27: the status line has no per-model window
 TOP_PROJECTS = 8
@@ -160,10 +160,11 @@ def _service_read_at(conn, members: Sequence[str]) -> Callable[[str], Optional[d
     marks = ",".join("?" * len(members))
 
     def read_at(meter_id: str) -> Optional[datetime]:
-        times = [timeutil.parse_iso(r["ts"]) for r in conn.execute(
-            f"SELECT ts FROM meter_log WHERE account IN ({marks}) AND meter = ? AND source = 'service'",
-            [*members, meter_id])]
-        return max(times) if times else None
+        # the newest by insertion, read backward: ts text carries different offsets (gate._service_at)
+        row = conn.execute(
+            f"SELECT ts FROM meter_log WHERE account IN ({marks}) AND meter = ? AND source = 'service' "
+            "ORDER BY rowid DESC LIMIT 1", [*members, meter_id]).fetchone()
+        return timeutil.parse_iso(row["ts"]) if row else None
     return read_at
 
 
@@ -223,8 +224,8 @@ def _session_share(conn, members: Sequence[str], meters: List[dict], no_session:
     period_start = period_end - timedelta(seconds=WEEK_S)
     marks = ",".join("?" * len(members))
     rows = [r for r in conn.execute(
-        f"SELECT ts, meter, pct, resets_at FROM meter_log WHERE account IN ({marks}) "
-        f"AND meter IN ('session', 'weekly')", list(members)).fetchall()
+        f"SELECT ts, meter, pct, resets_at FROM meter_log WHERE ts >= ? AND account IN ({marks}) "
+        f"AND meter IN ('session', 'weekly')", [ts_floor(period_start), *members]).fetchall()
             if period_start <= timeutil.parse_iso(r["ts"]) <= now]
     if no_session:
         since = period_start.astimezone().date().isoformat()

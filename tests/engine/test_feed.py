@@ -330,6 +330,27 @@ class SessionShare(unittest.TestCase):
         self.assertIsNone(s.build([s.block(s.k1, fresh(), "u-1")])["accounts"][0]["session_share"])
 
 
+class MeterLogReads(unittest.TestCase):
+    def test_feed_reads_only_the_weekly_period(self):
+        """Review-engine 8: a long meter_log history is filtered in SQL, so a run parses the period's
+        rows, not every row ever logged."""
+        s = Scenario(self)
+        weekly = "2026-11-30T17:00:00-08:00"
+        old = [(timeutil.iso(NOW - timedelta(days=9, minutes=i)), s.k1, m, 1.0, weekly)
+               for i in range(1500) for m in ("session", "weekly")]
+        s.conn.executemany("INSERT INTO meter_log (ts, account, meter, pct, resets_at, source) VALUES (?,?,?,?,?,'service')", old)
+        calls = []
+        real = timeutil.parse_iso
+
+        def counting(v):
+            calls.append(v)
+            return real(v)
+        from unittest import mock
+        with mock.patch.object(feed.timeutil, "parse_iso", counting):
+            s.build([s.block(s.k1, fresh(), "u-1")])
+        self.assertLess(len(calls), 300, "meter_log rows outside the weekly period were parsed")
+
+
 class ForeignResetLabel(unittest.TestCase):
     def test_error_names_the_other_account(self):
         """RULING 31 / R-14: the feed fills in the other account's label."""
