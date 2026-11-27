@@ -351,6 +351,10 @@ def turn_on(state, folder: str, *, python: Optional[str] = None, engine_dir=None
             raise _refuse("statusline on: no usable Python is recorded; set it with `jusage config python <path>`")
         wrapped = _wrapped(py, engine_dir or constants.HERE.parent, current)
 
+        if s.raw is not None and s.dumps() != s.raw:
+            raise _refuse(f"statusline on: {s.path} has formatting jusage would change (tabs, compact "
+                          "separators, escaped characters or a repeated key); only the statusLine may "
+                          "change, so it is not touched. Re-save it with 2-space indents, then try again")
         after = _with_command(s.data, wrapped, shape)
         restored = _with_command(after, current, shape)
         if s.dumps(restored) != s.dumps():

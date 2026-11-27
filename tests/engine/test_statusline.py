@@ -176,6 +176,27 @@ class OnOffTests(Base):
         self.assertEqual(json.loads(self.settings().read_text())["statusLine"]["command"], ORIGINAL)
         self.assertFalse(ConfigStore.load(self.state).statusline[self.key]["enabled"])
 
+    def test_on_refuses_a_settings_file_it_would_reformat(self):
+        """Review-security 6: only the statusLine key may change. A file jusage cannot write back
+        byte for byte (tabs, compact separators, escapes, a duplicate key) is refused, untouched."""
+        layouts = {
+            "tabs": '{\n\t"theme": "dark",\n\t"statusLine": "x"\n}\n',
+            "compact": '{"theme":"dark","statusLine":"x"}\n',
+            "escape": '{\n  "theme": "caf\\u00e9",\n  "statusLine": "x"\n}\n',
+            "duplicate": '{\n  "theme": "dark",\n  "theme": "light",\n  "statusLine": "x"\n}\n',
+        }
+        for why, raw in layouts.items():
+            with self.subTest(why):
+                folder = self.th.home / f".claude-{why}"
+                folder.mkdir()
+                key = accounts.folder_key(folder)
+                p = self.write_settings(None, folder=folder, raw=raw)
+                with self.assertRaises(statusline.StatuslineRefused) as cm:
+                    self.on(key)
+                self.assertIn("formatting", str(cm.exception.reason))
+                self.assertEqual(p.read_text(encoding="utf-8"), raw)
+                self.assertNotIn(key, ConfigStore.load(self.state).statusline)
+
     def test_string_shaped_statusline_restored_as_string(self):
         self.write_settings({"statusLine": ORIGINAL})
         self.on()
@@ -226,7 +247,7 @@ class OnOffTests(Base):
         self.assertIn("jusage-statusline", json.loads(real.read_text())["statusLine"]["command"])
 
     def test_indent_and_trailing_newline_kept(self):
-        raw = '{\n    "a": 1,\n    "statusLine": {"type": "command", "command": "echo hi"}\n}\n'
+        raw = '{\n    "a": 1,\n    "statusLine": {\n        "type": "command",\n        "command": "echo hi"\n    }\n}\n'
         self.write_settings(None, raw=raw)
         self.on()
         text = self.settings().read_text()
