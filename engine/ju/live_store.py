@@ -14,13 +14,13 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence, Union
 
 from .constants import LIVE_SCHEMA, STALE_AFTER_S
-from .contracts import ERROR_KINDS, BringUpRefused, Reading
+from .contracts import ERROR_KINDS, BringUpRefused, Reading, ReplyChanged
 from .timeutil import iso, parse_iso
 
 FILE_NAME = "live.json"
@@ -93,6 +93,7 @@ class StoreIO:
     read_json: Callable[[Path], dict]                 # E3: raises corrupt_error on bad JSON / non-object
     corrupt_error: type                               # E3: CorruptFile
     log: Callable[..., None]                          # E2: log(level, msg, **kv), never raises
+    check_reply: Callable[[dict], object]             # E11 parse: raises ReplyChanged on a reply it refuses
 
 
 class _BadShape(ValueError):
@@ -170,6 +171,14 @@ class LiveStore:
                 self.io.log("warn", "live.json migration: unreadable legacy entry; dropped", entry=name,
                             reason=str(e))
                 continue
+            if acc.data is not None:
+                try:
+                    self.io.check_reply(acc.data)
+                except ReplyChanged:
+                    # 0.1.x stored any reply it got; one 0.2.0 refuses would crash every later parse
+                    self.io.log("warn", "live.json migration: stored reply no longer parses; kept without data",
+                                entry=name)
+                    acc = replace(acc, data=None)
             live.put(key, acc)
         return live
 

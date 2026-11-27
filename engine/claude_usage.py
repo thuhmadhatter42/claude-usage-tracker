@@ -67,7 +67,7 @@ def version() -> str:
 def live_store() -> LiveStore:
     """E13 with E3's file calls and E2's log (RULING 14)."""
     return LiveStore(StoreIO(fsutil.write_private, fsutil.move_aside_corrupt, fsutil.read_json,
-                             fsutil.CorruptFile, houselog.log))
+                             fsutil.CorruptFile, houselog.log, usage_client.parse))
 
 
 def _login_warning(login) -> Optional[str]:

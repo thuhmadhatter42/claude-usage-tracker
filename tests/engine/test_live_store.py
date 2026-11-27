@@ -10,7 +10,7 @@ from pathlib import Path
 
 from tests.engine import support
 from ju import live_store, timeutil
-from ju.contracts import BringUpRefused, Meter, Reading
+from ju.contracts import BringUpRefused, Meter, Reading, ReplyChanged
 from ju.live_store import AccountLive, ErrorInfo, Live, LiveStore
 
 T0 = datetime(2026, 11, 26, 14, 0, 0, tzinfo=timezone.utc)
@@ -63,7 +63,14 @@ class FakeIO:
 
     def store_io(self):
         return live_store.StoreIO(write_private=self.write_private, move_aside_corrupt=self.move_aside_corrupt,
-                                  read_json=self.read_json, corrupt_error=self.CorruptFile, log=self.log)
+                                  read_json=self.read_json, corrupt_error=self.CorruptFile, log=self.log,
+                                  check_reply=self.check_reply)
+
+    @staticmethod
+    def check_reply(data):
+        """Stands in for E11 parse: {"bad": true} is a reply the parser refuses."""
+        if data.get("bad"):
+            raise ReplyChanged()
 
 
 class LiveStoreCase(unittest.TestCase):
@@ -139,6 +146,18 @@ class TestLiveStore(LiveStoreCase):
         self.assertEqual(len(dropped), 1)
         self.store.load(self.state, [self.a, self.b])
         self.assertEqual(len([m for m in self.io.logged if "migrated" in m[1]]), 1)
+
+    def test_legacy_reply_that_no_longer_parses_keeps_the_entry_without_data(self):
+        """Review-engine 6: 0.1.39 stored any reply it got. One the 0.2.0 parser refuses is kept with
+        data=None (logged), so no later run crashes parsing it."""
+        self.write_raw({".claude": {"fetched": "2026-11-25T10:00:00-08:00", "data": {"bad": True}, "error": None}})
+        live = self.store.load(self.state, [self.a])
+        self.assertIn(self.a, live.accounts)
+        self.assertIsNone(live.account(self.a).data)
+        self.assertEqual(live.account(self.a).fetched, timeutil.parse_iso("2026-11-25T10:00:00-08:00"))
+        self.assertTrue(any("no longer parses" in m[1] for m in self.io.logged))
+        on_disk = json.loads(self.path().read_text())
+        self.assertIsNone(on_disk["accounts"][self.a]["data"])
 
     def test_legacy_pre_0119_error_reply_has_no_data(self):
         self.write_raw({".claude": {"fetched": "2026-11-25T10:00:00-08:00",
