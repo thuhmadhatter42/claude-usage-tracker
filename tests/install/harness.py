@@ -53,6 +53,10 @@ def clean_env(home: Path, *path_front: Path, extra=None) -> dict:
 
 
 def run(cmd, env=None, cwd=None, timeout=240):
+    # No env given -> a fresh temp HOME, never the real one: a call without env once let a test write
+    # "Sam Q" into the real ~/.claude-usage/config.json.
+    if env is None:
+        env = clean_env(scratch())
     r = subprocess.run([str(c) for c in cmd], env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     return r.returncode, r.stdout + r.stderr
 
