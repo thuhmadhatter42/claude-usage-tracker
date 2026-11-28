@@ -16,7 +16,7 @@ final class QuickKeysTests: XCTestCase {
 
     override func setUp() async throws {
         suite = "QuickKeysTests.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suite)
+        defaults = TestDefaults.make(suite)
     }
 
     override func tearDown() async throws { defaults.removePersistentDomain(forName: suite) }

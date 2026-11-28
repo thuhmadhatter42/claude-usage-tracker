@@ -19,7 +19,7 @@ final class HouseJusageValuesTests: XCTestCase {
 
     // MARK: Quick Keys
     @MainActor func testQuickKeyRowsAreSpecsTable() throws {
-        let keys = QuickKeys(defs: QuickKeys.appRows + QuickKeys.standardRows, defaults: UserDefaults(suiteName: "w3c-\(UUID().uuidString)")!, osReserved: { [] })
+        let keys = QuickKeys(defs: QuickKeys.appRows + QuickKeys.standardRows, defaults: TestDefaults.make("w3c-\(UUID().uuidString)")!, osReserved: { [] })
         func chord(_ id: String) -> QuickChord { keys.chord(for: id) }
         XCTAssertEqual(chord("refresh"), QuickChord(key: "r", mods: .command))
         XCTAssertEqual(chord("dashboard"), QuickChord(key: "d", mods: .command))

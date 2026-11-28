@@ -4,7 +4,7 @@ import XCTest
 final class SettingsTests: XCTestCase {
     private func suite(_ name: String = #function) -> UserDefaults {
         let n = "jusage-test-\(name)-\(UUID().uuidString)"
-        let d = UserDefaults(suiteName: n)!
+        let d = TestDefaults.make(n)!
         d.removePersistentDomain(forName: n)
         return d
     }

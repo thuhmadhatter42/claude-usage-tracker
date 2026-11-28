@@ -52,19 +52,30 @@ TAG="${RELEASE_TAG_PREFIX:-$APP_NAME}-$VER"
 xcrun stapler validate "$DMG" >/dev/null 2>&1 || die "$DMG is not stapled (run release.sh first)"
 mkdir -p "$DOWNLOADS"
 [ ! -e "$DOWNLOADS/$BASE" ] || cmp -s "$DMG" "$DOWNLOADS/$BASE" || die "$DOWNLOADS/$BASE already exists and differs: a shipped version is never overwritten (bump VERSION)"
+# Already staged and signed (release.sh ran this step)? Then publishing reuses that appcast: re-running
+# generate_appcast needs the Keychain key, and with the screen locked it waits forever on a prompt (2026-11-27).
+SIGNED=0
+if [ -e "$DOWNLOADS/$BASE" ] && [ -f "$DOWNLOADS/appcast.xml" ] \
+   && grep -q "shortVersionString>$VER<" "$DOWNLOADS/appcast.xml" && grep -q "$BASE\".*sparkle:edSignature\|sparkle:edSignature.*$BASE\|$TAG/$BASE" "$DOWNLOADS/appcast.xml"; then
+  SIGNED=1
+fi
 cp -p "$DMG" "$DOWNLOADS/"
 cp -p "$DMG" "$DOWNLOADS/$APP_NAME-latest.dmg.tmp" && mv "$DOWNLOADS/$APP_NAME-latest.dmg.tmp" "$DOWNLOADS/$APP_NAME-latest.dmg"
-STAGE="$(mktemp -d "${TMPDIR:-/tmp}/appcast.XXXXXX")"; trap 'rm -rf "$STAGE"' EXIT
-find "$DOWNLOADS" -maxdepth 1 -name "$APP_NAME-[0-9]*.dmg" -exec cp -p {} "$STAGE/" \;
-[ -f "$DOWNLOADS/appcast.xml" ] && cp -p "$DOWNLOADS/appcast.xml" "$STAGE/"
-"$TOOLS/generate_appcast" --account "$SPARKLE_ACCOUNT" --download-url-prefix "$DOWNLOAD_PREFIX" "$STAGE" || die "generate_appcast failed"
-[ -s "$STAGE/appcast.xml" ] || die "generate_appcast wrote no appcast.xml"
-if [ -n "${RELEASE_TAG_PREFIX:-}" ]; then
-  esc="$(printf '%s' "$DOWNLOAD_PREFIX" | sed 's/[][\.*^$#|&]/\\&/g')"
-  sed -E "s#url=\"${esc}($APP_NAME-([0-9]+\\.[0-9]+\\.[0-9]+)\\.dmg)\"#url=\"${DOWNLOAD_PREFIX}${RELEASE_TAG_PREFIX}-\\2/\\1\"#g" "$STAGE/appcast.xml" > "$STAGE/appcast.rewritten"
-  mv "$STAGE/appcast.rewritten" "$STAGE/appcast.xml"
+if [ "$SIGNED" -eq 1 ]; then
+  echo "appcast already has $BASE signed; reusing it"
+else
+  STAGE="$(mktemp -d "${TMPDIR:-/tmp}/appcast.XXXXXX")"; trap 'rm -rf "$STAGE"' EXIT
+  find "$DOWNLOADS" -maxdepth 1 -name "$APP_NAME-[0-9]*.dmg" -exec cp -p {} "$STAGE/" \;
+  [ -f "$DOWNLOADS/appcast.xml" ] && cp -p "$DOWNLOADS/appcast.xml" "$STAGE/"
+  "$TOOLS/generate_appcast" --account "$SPARKLE_ACCOUNT" --download-url-prefix "$DOWNLOAD_PREFIX" "$STAGE" || die "generate_appcast failed"
+  [ -s "$STAGE/appcast.xml" ] || die "generate_appcast wrote no appcast.xml"
+  if [ -n "${RELEASE_TAG_PREFIX:-}" ]; then
+    esc="$(printf '%s' "$DOWNLOAD_PREFIX" | sed 's/[][\.*^$#|&]/\\&/g')"
+    sed -E "s#url=\"${esc}($APP_NAME-([0-9]+\\.[0-9]+\\.[0-9]+)\\.dmg)\"#url=\"${DOWNLOAD_PREFIX}${RELEASE_TAG_PREFIX}-\\2/\\1\"#g" "$STAGE/appcast.xml" > "$STAGE/appcast.rewritten"
+    mv "$STAGE/appcast.rewritten" "$STAGE/appcast.xml"
+  fi
+  cp "$STAGE/appcast.xml" "$DOWNLOADS/appcast.xml"
 fi
-cp "$STAGE/appcast.xml" "$DOWNLOADS/appcast.xml"
 echo "OK $DOWNLOADS/appcast.xml ($(grep -c '<item>' "$DOWNLOADS/appcast.xml") item(s)); latest = $BASE"
 
 if [ "$PUBLISH" -eq 1 ]; then

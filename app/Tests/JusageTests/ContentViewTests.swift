@@ -62,7 +62,7 @@ final class ContentViewTests: XCTestCase {
     func testRendersEveryTab() throws {
         let model = AppModel(now: Fixture.now)
         model.apply(.ok(try Fixture.data("tests/fixtures/feed-v2.json")), now: Fixture.now)
-        let store = SettingsStore(defaults: UserDefaults(suiteName: "jusage-views-\(UUID().uuidString)")!)
+        let store = SettingsStore(defaults: TestDefaults.make("jusage-views-\(UUID().uuidString)")!)
         store.update { $0.openFolds = [FoldID.detail, FoldID.projects, FoldID.person("c3d4")] }
         let services = ViewFixture.services()
         for tab in [Tab.today, .month, .settings] {

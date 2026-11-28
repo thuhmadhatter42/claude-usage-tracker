@@ -23,7 +23,7 @@ final class BringUpRefusalTests: XCTestCase {
     }
 
     private func store(python: String? = "/opt/homebrew/bin/python3") -> SettingsStore {
-        let s = SettingsStore(defaults: UserDefaults(suiteName: "jusage-refusal-\(UUID().uuidString)")!)
+        let s = SettingsStore(defaults: TestDefaults.make("jusage-refusal-\(UUID().uuidString)")!)
         if let python { s.update { $0.pythonPath = python } }
         return s
     }
@@ -63,7 +63,7 @@ final class BringUpRefusalTests: XCTestCase {
     }
 
     func testDamagedSettingsRefuseAndKeepTheRecord() throws {
-        let d = UserDefaults(suiteName: "jusage-refusal-\(UUID().uuidString)")!
+        let d = TestDefaults.make("jusage-refusal-\(UUID().uuidString)")!
         let damaged = Data(#"{"menuBarMode":"meter:","pythonPath":"/opt/homebrew/bin/python3"}"#.utf8)
         d.set(damaged, forKey: SettingsStore.key)
         let line = try XCTUnwrap(refused(try FakeAppBundle.make(in: temp), settings: SettingsStore(defaults: d)))

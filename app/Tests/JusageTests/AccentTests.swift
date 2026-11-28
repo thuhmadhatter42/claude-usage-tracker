@@ -11,7 +11,7 @@ final class AccentTests: XCTestCase {
 
     override func setUp() async throws {
         suite = "AccentTests.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suite)
+        defaults = TestDefaults.make(suite)
     }
 
     override func tearDown() async throws {

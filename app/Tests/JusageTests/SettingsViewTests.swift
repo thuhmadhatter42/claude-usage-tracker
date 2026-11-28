@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class SettingsViewTests: XCTestCase {
-    private func store() -> SettingsStore { SettingsStore(defaults: UserDefaults(suiteName: "jusage-settings-\(UUID().uuidString)")!) }
+    private func store() -> SettingsStore { SettingsStore(defaults: TestDefaults.make("jusage-settings-\(UUID().uuidString)")!) }
 
     func testOrderMatchesSpec() {
         XCTAssertEqual(SettingsRow.allCases, [

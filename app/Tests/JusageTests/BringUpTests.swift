@@ -31,7 +31,7 @@ final class BringUpTests: XCTestCase {
     }
 
     func makeStore(python: String? = nil) -> SettingsStore {
-        let store = SettingsStore(defaults: UserDefaults(suiteName: "jusage-bringup-\(UUID().uuidString)")!)
+        let store = SettingsStore(defaults: TestDefaults.make("jusage-bringup-\(UUID().uuidString)")!)
         if let python { store.update { $0.pythonPath = python } }
         return store
     }
